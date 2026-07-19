@@ -50,6 +50,9 @@
   code { background:#0b1220; padding:1px 5px; border-radius:4px; }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
              clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .ai-note { border:1px dashed var(--line); border-radius:6px; padding:8px 10px; }
+  .ai-note .ai-note-label { color:var(--muted); font-size:11px; text-transform:uppercase;
+             letter-spacing:.03em; margin-bottom:4px; }
 
   /* Wizard chrome */
   .steps-bar { display:flex; gap:8px; margin:16px 0 6px; }
@@ -543,6 +546,11 @@ function buildDocReviewHtml(idx){
     }
   }
 
+  if (!isOcr && normalFields.length){
+    html += `<button type="button" class="btn-ghost" onclick="getProfileNotes(${idx})">Get AI review notes (optional)</button>`;
+    html += `<div class="out ai-note" id="profile-notes-out"></div>`;
+  }
+
   // Quarantine: doc.quarantine[] plus any untrusted_instruction_text field, deduped by text.
   const qItems = (doc.quarantine || []).map(q => ({ text: q.text, page: q.page, matched_pattern: q.matched_pattern }));
   const seen = new Set(qItems.map(q => q.text));
@@ -589,6 +597,31 @@ function updateDocGate(){
 function confirmAllInDoc(){
   document.querySelectorAll("#doc-review .field-confirm-cb").forEach(b => b.checked = true);
   updateDocGate();
+}
+
+function aiNoteHtml(result){
+  const label = `<div class="ai-note-label">AI suggestion &mdash; not a decision, not authoritative</div>`;
+  if (result.abstained){
+    return label + `<span class="muted">${esc(result.abstain_reason || "No note available.")}</span>`;
+  }
+  return label + `<div>${esc(result.notes)}</div>`;
+}
+
+async function getProfileNotes(idx){
+  persistCurrentDoc(); // sync any in-progress edits before sending
+  const doc = state.docs[idx];
+  const out = document.getElementById("profile-notes-out");
+  if (!doc || !out) return;
+  out.innerHTML = "<span class='muted'>Checking for anything worth double-checking...</span>";
+  try {
+    const result = await post("/api/profile_notes", {
+      document_type: doc.document_type,
+      fields: (doc.fields || []).filter(f => f.field !== "untrusted_instruction_text"),
+    });
+    out.innerHTML = aiNoteHtml(result);
+  } catch (e) {
+    out.innerHTML = `<span class="muted">Could not reach the AI note service.</span>`;
+  }
 }
 
 function persistCurrentDoc(){
@@ -856,6 +889,7 @@ async function buildPacket(){
         .map(f => ({ field: f.field, value: f.value, confidence: f.confidence, page: f.page, confirmed: !!f.confirmed })),
     })),
     document_status: prep.document_status || [],
+    flags: prep.flags || [],
     income_comparison: prep.income_comparison,
     citations: prep.citations || [],
     decision_boundary: prep.decision_boundary,
@@ -893,6 +927,9 @@ async function buildPacket(){
   html += `<div class="muted" style="margin-top:8px">Generated ${esc(packet.generated_at)}</div>`;
   html += `</div>`; // #packet-printable
 
+  html += `<button type="button" class="btn-ghost" onclick="getPrepareNotes()">Get AI review notes (optional)</button>`;
+  html += `<div class="out ai-note" id="prepare-notes-out"></div>`;
+
   html += `<div class="row" style="margin-top:14px">
     <button type="button" onclick="downloadPacketJson()">Download packet (JSON)</button>
     <button type="button" onclick="window.print()">Download packet (PDF)</button>
@@ -900,6 +937,22 @@ async function buildPacket(){
   </div>`;
 
   out.innerHTML = html;
+}
+
+async function getPrepareNotes(){
+  const out = document.getElementById("prepare-notes-out");
+  if (!out || !state.packet) return;
+  out.innerHTML = "<span class='muted'>Checking the checklist for anything worth double-checking...</span>";
+  try {
+    const result = await post("/api/prepare_notes", {
+      household_id: state.packet.household_id,
+      document_status: state.packet.document_status,
+      flags: state.packet.flags,
+    });
+    out.innerHTML = aiNoteHtml(result);
+  } catch (e) {
+    out.innerHTML = `<span class="muted">Could not reach the AI note service.</span>`;
+  }
 }
 
 function downloadPacketJson(){

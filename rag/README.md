@@ -94,6 +94,26 @@ git-ignored.
   never the uploaded document text, extracted field values, or the renter's
   question text. See `uploads/audit.jsonl` (git-ignored).
 
+## Optional AI review notes (`copilot_notes.py`)
+
+`POST /api/profile_notes` (one document's extracted fields) and
+`POST /api/prepare_notes` (the checklist grid + flags) ask an LLM for a short,
+plain-language completeness/consistency note -- "this gross pay doesn't
+reconcile with hourly rate x hours", "no benefit letter attached" -- layered
+*on top of* the already-deterministic Profile/Prepare output, never replacing
+it. These are optional (a button, not automatic) and always rendered as a
+clearly secondary "AI suggestion -- not a decision" panel.
+
+Two things keep this from becoming a decisioning surface:
+- `prepare_notes`'s signature has no `income_comparison`/threshold/AMI
+  parameter at all -- it structurally cannot leak that data because it is
+  never given it.
+- Every generated note is scanned for eligibility/threshold/AMI/percentage
+  language after the fact (`copilot_notes._to_review_notes`); if anything
+  slips through, the note is discarded and the caller sees an abstain
+  message instead of the tainted text -- the same fail-closed pattern as
+  `understand.py`'s retrieval abstention. See `rag/tests/test_copilot_notes.py`.
+
 ## Discover (stretch goal, `discover.py`)
 
 `GET /api/properties` serves the organizer-provided one-metro LIHTC property

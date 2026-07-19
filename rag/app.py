@@ -18,6 +18,8 @@ Endpoints (all English output, no eligibility verdict anywhere):
   POST   /api/understand      cited rule answer (or safe/abstain)
   POST   /api/income          neutral annualized-income vs. threshold comparison
   POST   /api/prepare         deterministic document-readiness + checklist grid
+  POST   /api/profile_notes   optional, non-authoritative AI consistency notes on one document
+  POST   /api/prepare_notes   optional, non-authoritative AI notes on the checklist grid
   POST   /api/session/delete  wipe an upload session's files from disk
   GET    /api/properties      (stretch: Discover) transparent LIHTC property directory
 
@@ -47,6 +49,7 @@ from werkzeug.utils import secure_filename
 from rag import crypto
 from rag.audit_log import log_event
 from rag.calculate import IncomeSource, summarize_income
+from rag.copilot_notes import prepare_notes, profile_notes
 from rag.discover import available_cities, discover_properties
 from rag.index import index_exists
 from rag.prepare import assess_readiness
@@ -354,6 +357,52 @@ def api_prepare():
         flag_codes=[f.code for f in assessment.flags],
     )
     return jsonify(assessment.to_dict())
+
+
+@app.post("/api/profile_notes")
+def api_profile_notes():
+    """Optional AI commentary on one document's extracted fields -- never
+    authoritative, never an eligibility signal. See rag/copilot_notes.py.
+    """
+    data = request.get_json(silent=True) or {}
+    document_type = str(data.get("document_type") or "")
+    fields = list(data.get("fields") or [])
+    try:
+        result = profile_notes(document_type, fields)
+    except Exception as exc:  # LLM call is best-effort; never break the Profile step over it.
+        result = None
+        error = str(exc)
+    else:
+        error = None
+    log_event("profile_notes", document_type=document_type, abstained=(result.abstained if result else True))
+    if result is None:
+        return jsonify(notes="", abstained=True, abstain_reason=f"Could not generate notes: {error}")
+    return jsonify(result.to_dict())
+
+
+@app.post("/api/prepare_notes")
+def api_prepare_notes():
+    """Optional AI commentary on the document checklist grid -- structurally
+    excludes income/threshold/AMI data (see prepare_notes's signature).
+    """
+    data = request.get_json(silent=True) or {}
+    document_status = list(data.get("document_status") or [])
+    flags = list(data.get("flags") or [])
+    try:
+        result = prepare_notes(document_status, flags)
+    except Exception as exc:  # LLM call is best-effort; never break the Prepare step over it.
+        result = None
+        error = str(exc)
+    else:
+        error = None
+    log_event(
+        "prepare_notes",
+        household_id=data.get("household_id"),
+        abstained=(result.abstained if result else True),
+    )
+    if result is None:
+        return jsonify(notes="", abstained=True, abstain_reason=f"Could not generate notes: {error}")
+    return jsonify(result.to_dict())
 
 
 @app.get("/api/properties")
