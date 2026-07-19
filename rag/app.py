@@ -167,6 +167,8 @@ def api_page_png():
         scale = img.width / page.width
         draw = ImageDraw.Draw(img)
         for f in profile.fields:
+            if not f.bbox or len(f.bbox) != 4:
+                continue  # OCR-extracted fields have no per-field box to draw
             is_q = f.field == "untrusted_instruction_text"
             color = _QUARANTINE_COLOR if is_q else _FIELD_COLOR
             x0, y0, x1, y1 = f.bbox  # bottom-left origin

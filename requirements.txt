@@ -1,2 +1,5 @@
 pdfplumber>=0.11
 pytest>=7.0
+# OCR path for rasterized documents (src/extract_ocr.py) uses OpenAI vision.
+openai>=1.40
+python-dotenv>=1.0
