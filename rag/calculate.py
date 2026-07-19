@@ -1,7 +1,7 @@
 """Deterministic income annualization and threshold comparison.
 
 This module is the ONLY place income math happens, and it is fully deterministic:
-limits are looked up from the San Diego FY2026 threshold JSON (never retrieved,
+limits are looked up from the Boston FY2026 threshold JSON (never retrieved,
 never derived), income is annualized with fixed frequency multipliers, and the
 result is a neutral side-by-side comparison.
 

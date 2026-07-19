@@ -5,13 +5,13 @@ rule prose + runs deterministic income math) and helps **prepare** (flags missin
 or stale documents). It never decides eligibility — income and limits are shown
 side by side for a **human** reviewer.
 
-**Scope (frozen):** LIHTC (Section 42) · San Diego-Chula Vista-Carlsbad, CA MSA ·
+**Scope (frozen):** LIHTC (Section 42) · Boston-Cambridge-Quincy, MA-NH HMFA ·
 FY2026 (effective 2026-05-01).
 
 ## Absolute rules (see `claude.md`)
 
 1. **Numbers are a lookup, not retrieval.** Income limits come from
-   `san_diego_mtsp_thresholds_fy2026.json` via `calculate.py`, never from a chunk.
+   `boston_mtsp_thresholds_fy2026.json` via `calculate.py`, never from a chunk.
 2. **No eligibility verdicts** anywhere — code, prompts, chunks, or output.
 3. **No chunk without a citation** (`citation` + `source_url`).
 4. **Abstain when unsure** — retrieval returns nothing below the relevance floor.

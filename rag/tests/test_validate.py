@@ -23,7 +23,7 @@ def test_missing_citation_flagged():
 
 
 def test_income_limit_number_flagged():
-    problems = validate_chunks([_chunk("The 60% limit is $104,940 for a family of four.")])
+    problems = validate_chunks([_chunk("The 60% limit is $102,840 for a family of four.")])
     assert any("money pattern" in p for p in problems)
 
 
@@ -45,4 +45,4 @@ def test_other_program_flagged():
 
 def test_assert_valid_raises_on_bad_corpus():
     with pytest.raises(ValidationError):
-        assert_valid([_chunk("Text with $104,940 income limit.")])
+        assert_valid([_chunk("Text with $102,840 income limit.")])

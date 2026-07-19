@@ -4,13 +4,13 @@ Three responsibilities live here, and nothing else reaches out to the network:
   * ``DOCS`` - the document inventory. Because PDFs cannot carry front matter,
     this dict is the sole source of every source document's citation metadata.
     Adding a new rule document means adding a ``DOCS`` entry; no code changes.
-  * ``load_thresholds`` - loads the San Diego FY2026 income-limit LOOKUP table.
+  * ``load_thresholds`` - loads the Boston FY2026 income-limit LOOKUP table.
     Income numbers never come from retrieval; they come from this JSON only.
   * key loading - reads API keys from ``.env`` (never hardcoded, never logged).
     The repo's ``.env`` stores the OpenAI key under the non-standard name
     ``OPEN_AI_API``; we map it to the conventional name here.
 
-Scope is frozen: LIHTC / San Diego-Chula Vista-Carlsbad, CA MSA / FY2026.
+Scope is frozen: LIHTC / Boston-Cambridge-Quincy, MA-NH HMFA / FY2026.
 """
 from __future__ import annotations
 
@@ -27,13 +27,13 @@ REPO_ROOT = RAG_DIR.parent
 CORPUS_RAW = RAG_DIR / "corpus" / "raw"
 CORPUS_CACHE = RAG_DIR / "corpus" / "cache"
 INDEX_DIR = RAG_DIR / "index"
-THRESHOLDS_PATH = RAG_DIR / "san_diego_mtsp_thresholds_fy2026.json"
+THRESHOLDS_PATH = RAG_DIR / "boston_mtsp_thresholds_fy2026.json"
 ENV_PATH = REPO_ROOT / ".env"
 
 # --- frozen scope ----------------------------------------------------------
 PROGRAM = "LIHTC"
 RULE_YEAR = "FY2026"
-AREA = "San Diego-Chula Vista-Carlsbad, CA MSA (San Diego County)"
+AREA = "Boston-Cambridge-Quincy, MA-NH HMFA"
 EFFECTIVE_DATE = "2026-05-01"
 
 # --- model / retrieval knobs ----------------------------------------------
@@ -156,7 +156,7 @@ def cache_path(source_id: str) -> Path:
 # --- thresholds lookup -----------------------------------------------------
 @lru_cache(maxsize=1)
 def load_thresholds() -> dict[str, Any]:
-    """Load the San Diego FY2026 income-limit lookup table (cached)."""
+    """Load the Boston FY2026 income-limit lookup table (cached)."""
     with THRESHOLDS_PATH.open(encoding="utf-8") as f:
         return json.load(f)
 

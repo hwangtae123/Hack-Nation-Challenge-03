@@ -57,9 +57,9 @@ def test_limit_for_off_table_is_none():
 
 def test_boundary_is_inclusive():
     # income exactly equal to the threshold is treated as below_or_equal
-    assert compare_to_threshold(104940, 104940) == "below_or_equal"
-    assert compare_to_threshold(104939.99, 104940) == "below_or_equal"
-    assert compare_to_threshold(104940.01, 104940) == "above"
+    assert compare_to_threshold(102840, 102840) == "below_or_equal"
+    assert compare_to_threshold(102839.99, 102840) == "below_or_equal"
+    assert compare_to_threshold(102840.01, 102840) == "above"
     assert compare_to_threshold(50000, None) == "no_frozen_threshold"
 
 
@@ -75,7 +75,7 @@ def test_summarize_income_sums_and_compares():
     assert res.threshold == limit_for(4, 60)
     assert res.comparison == "below_or_equal"
     assert res.effective_date == "2026-05-01"
-    assert res.area.startswith("San Diego")
+    assert res.area.startswith("Boston")
     assert len(res.per_source) == 2
 
 
