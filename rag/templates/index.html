@@ -10,6 +10,7 @@
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
          background:var(--bg); color:var(--ink); line-height:1.5; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   header { padding:20px 24px; border-bottom:1px solid var(--line); }
   h1 { margin:0 0 4px; font-size:20px; }
   .scope { color:var(--muted); font-size:13px; }
@@ -93,6 +94,16 @@
   .gate.locked { background:rgba(245,158,11,.12); color:var(--warn); border:1px solid var(--warn); }
   .gate.ready { background:rgba(52,211,153,.12); color:var(--ok); border:1px solid var(--ok); }
   .field-hint { margin:2px 0 10px; }
+
+  /* Packet step */
+  .packet-doc-table { width:100%; border-collapse:collapse; margin:6px 0 10px; font-size:12px; }
+  .packet-doc-table td { border-bottom:1px solid var(--line); padding:4px 8px; }
+
+  @media print {
+    body * { visibility: hidden; }
+    #packet-printable, #packet-printable * { visibility: visible; }
+    #packet-printable { position: absolute; left: 0; top: 0; width: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -109,7 +120,7 @@
 </div>
 
 <main>
-  <div id="wizard-root"></div>
+  <div id="wizard-root" aria-live="polite"></div>
 </main>
 
 <script>
@@ -133,12 +144,30 @@ function citeHtml(c){
   return `<div class="cite">[${esc(c.n||"")}] <b>${esc(label)}</b>${page}${eff}${url}</div>`;
 }
 function comparisonHtml(cmp){
+  // ABSTAIN: not enough confirmed evidence yet. Never render a numeric $0
+  // comparison in this case -- that would look like a real confirmed result.
+  if (cmp.status === "abstain"){
+    return `<div class="kv"><span class="badge safe">ABSTAIN</span><br>`
+      + `${esc(cmp.abstain_reason || "Not enough confirmed evidence to compute this comparison yet.")}<br>`
+      + `<span class="muted">${esc(cmp.area)} &middot; effective ${esc(cmp.effective_date)}</span></div>`;
+  }
   const label = COMPARISON_LABEL[cmp.comparison] || cmp.comparison;
   const thr = cmp.threshold==null ? "n/a" : `$${Number(cmp.threshold).toLocaleString()}`;
+  // Always show the five things together: confirmed value, threshold, formula, source, effective date.
+  const formulas = (cmp.per_source || []).map(p =>
+    `$${esc(Number(p.amount).toLocaleString())} &times; ${esc(p.periods_per_year)} (${esc(p.frequency)}) = `
+    + `$${esc(Number(p.annualized).toLocaleString())}`
+  );
+  const formulaHtml = formulas.length
+    ? `<div class="muted" style="margin-top:4px">Formula: ${formulas.join("; ")}</div>` : "";
+  const sourceLink = cmp.source_url
+    ? `<a href="${esc(cmp.source_url)}" target="_blank" rel="noopener">source</a>` : "";
   return `<div class="kv">Annualized income: <b>$${Number(cmp.annualized_income).toLocaleString()}</b><br>`
     + `Frozen ${esc(cmp.threshold_pct)}% threshold (size ${esc(cmp.household_size)}): <b>${thr}</b><br>`
     + `Comparison: <b>${esc(label)}</b><br>`
-    + `<span class="muted">${esc(cmp.area)} &middot; effective ${esc(cmp.effective_date)}</span></div>`;
+    + formulaHtml
+    + `<span class="muted">${esc(cmp.area)} &middot; effective ${esc(cmp.effective_date)}`
+    + (sourceLink ? ` &middot; ${sourceLink}` : "") + `</span></div>`;
 }
 
 /* ============================================================
@@ -147,10 +176,16 @@ function comparisonHtml(cmp){
    step: 0 = add documents
          1..docs.length = review document[step-1]
          docs.length+1  = household summary
-         docs.length+2  = understand (final step)
+         docs.length+2  = prepare packet
+         docs.length+3  = understand (final step)
    ============================================================ */
+function makeSessionId(){
+  if (window.crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return "sess-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+}
 const state = {
   step: 0,
+  sessionId: makeSessionId(), // scopes this page's uploads on the server; see /api/session/delete
   docs: [],             // merged extraction results (dataset + upload), each with .source
   allDocuments: [],      // full bundled catalog from /api/documents, for the picker
   selectedBundled: new Set(),
@@ -158,6 +193,10 @@ const state = {
   errors: [],            // {file, error} from /api/upload or a failed batch call
   stepMessage: "",       // transient validation message on step 1
   question: "How is annual income calculated?",
+  hhid: "",              // carried across the summary/packet steps once the user sets it
+  hhsize: null,
+  required: null,        // array | null (null = not yet set, use loadedDocTypes())
+  packet: null,          // last assembled packet object (Prepare packet step)
 };
 
 window.addEventListener("DOMContentLoaded", async () => {
@@ -187,6 +226,8 @@ function render(){
     html += buildDocReviewHtml(state.step - 1);
   } else if (state.step === N + 1){
     html += buildSummaryHtml();
+  } else if (state.step === N + 2){
+    html += buildPacketHtml();
   } else {
     html += buildUnderstandHtml();
   }
@@ -194,18 +235,22 @@ function render(){
   if (state.step === N + 1 && N > 0){
     runSummary(); // auto-compute so the aggregation is visible on arrival; button re-runs after edits
   }
+  if (state.step === N + 2 && N > 0){
+    buildPacket(); // auto-build so the packet is visible on arrival; button re-runs after edits
+  }
 }
 function dismissErrors(){ state.errors = []; render(); }
 
 function stepIndicatorHtml(){
   const N = state.docs.length;
-  const phases = ["Add documents", "Review documents", "Household summary", "Understand rules"];
+  const phases = ["Add documents", "Review documents", "Household summary", "Prepare packet", "Understand rules"];
   let phaseIdx, sub = "";
   if (state.step === 0){ phaseIdx = 0; }
   else if (state.step <= N){ phaseIdx = 1; sub = `Document ${state.step} of ${N}`; }
   else if (state.step === N + 1){ phaseIdx = 2; }
-  else { phaseIdx = 3; }
-  const total = N + 3;
+  else if (state.step === N + 2){ phaseIdx = 3; }
+  else { phaseIdx = 4; }
+  const total = N + 4;
   let html = `<div class="steps-bar">` + phases.map((p, i) => {
     const cls = i === phaseIdx ? "active" : (i < phaseIdx ? "done" : "");
     return `<div class="step-pill ${cls}">${i + 1}. ${esc(p)}</div>`;
@@ -215,14 +260,29 @@ function stepIndicatorHtml(){
 }
 
 /* ---------------- navigation ---------------- */
+function persistSummaryInputs(){
+  // Carries household id/size/required across the summary <-> packet steps
+  // regardless of which one's inputs are currently mounted (no-ops otherwise).
+  const ids = [["s-hhid","s-hhsize","s-required"], ["p-hhid","p-hhsize","p-required"]];
+  ids.forEach(([hhidId, hhsizeId, reqId]) => {
+    const hhidEl = document.getElementById(hhidId);
+    const hhsizeEl = document.getElementById(hhsizeId);
+    const reqEl = document.getElementById(reqId);
+    if (hhidEl) state.hhid = hhidEl.value || state.hhid;
+    if (hhsizeEl){ const n = parseInt(hhsizeEl.value, 10); if (!isNaN(n)) state.hhsize = n; }
+    if (reqEl) state.required = reqEl.value.split(",").map(s => s.trim()).filter(Boolean);
+  });
+}
 function goBack(){
   persistCurrentDoc();
+  persistSummaryInputs();
   if (state.step > 0) state.step -= 1;
   render();
 }
 function goNext(){
   persistCurrentDoc();
-  const maxStep = state.docs.length + 2;
+  persistSummaryInputs();
+  const maxStep = state.docs.length + 3;
   if (state.step < maxStep) state.step += 1;
   render();
 }
@@ -316,11 +376,11 @@ function buildStep1Html(){
     html += `<span class="muted">Nothing selected yet.</span>`;
   }
   Array.from(state.selectedBundled).sort().forEach(fn => {
-    html += `<span class="chip">${esc(fn)}<button type="button" onclick="removeBundledChip('${attrJs(fn)}')" aria-label="Remove">&times;</button></span>`;
+    html += `<span class="chip">${esc(fn)}<button type="button" onclick="removeBundledChip('${attrJs(fn)}')" aria-label="Remove ${esc(fn)}">&times;</button></span>`;
   });
   state.uploadFiles.forEach((f, i) => {
     html += `<span class="chip">${esc(f.name)} <span class="muted">(upload)</span>`
-          + `<button type="button" onclick="removeUploadChip(${i})" aria-label="Remove">&times;</button></span>`;
+          + `<button type="button" onclick="removeUploadChip(${i})" aria-label="Remove ${esc(f.name)}">&times;</button></span>`;
   });
   html += `</div>`;
 
@@ -352,6 +412,7 @@ async function extractAndContinue(){
     if (uploads.length){
       const fd = new FormData();
       uploads.forEach(f => fd.append("files", f));
+      fd.append("session_id", state.sessionId);
       const r = await fetch("/api/upload", { method: "POST", body: fd });
       const d = await r.json();
       if (d.error) errors.push({ file: "upload", error: d.error });
@@ -401,7 +462,8 @@ function buildDocReviewHtml(idx){
   html += `<span class="badge ${badgeClass}">${esc(doc.status)}</span> `;
   html += `<span class="muted">${doc.household_id ? esc(doc.household_id) + " &middot; " : ""}${source === "upload" ? "uploaded" : "bundled dataset"}</span>`;
 
-  html += `<img class="doc-img" src="/api/page.png?file=${encodeURIComponent(doc.file_name)}&source=${source}" `
+  const sessionParam = source === "upload" ? `&session_id=${encodeURIComponent(state.sessionId)}` : "";
+  html += `<img class="doc-img" src="/api/page.png?file=${encodeURIComponent(doc.file_name)}&source=${source}${sessionParam}" `
         + `alt="Page 1 with extracted field boxes">`;
 
   if (isOcr){
@@ -599,14 +661,14 @@ function buildSummaryHtml(){
   html += `</div>`;
 
   html += `<div class="row">
-    <div><label>Household id</label><input id="s-hhid" value="${esc(defaultHouseholdId())}"></div>
-    <div><label>Household size</label><input id="s-hhsize" type="number" min="1" value="${esc(defaultHouseholdSize())}"></div>
+    <div><label>Household id</label><input id="s-hhid" value="${esc(state.hhid || defaultHouseholdId())}"></div>
+    <div><label>Household size</label><input id="s-hhsize" type="number" min="1" value="${esc(state.hhsize || defaultHouseholdSize())}"></div>
   </div>`;
 
   html += `<label style="margin-top:12px">Present document types (loaded)</label>`
         + `<div class="muted" style="margin-bottom:6px">${esc(loadedDocTypes().join(", ") || "(none)")}</div>`;
   html += `<label>Required document types (comma-separated, editable)</label>
-    <input id="s-required" value="${esc(loadedDocTypes().join(", "))}">`;
+    <input id="s-required" value="${esc((state.required || loadedDocTypes()).join(", "))}">`;
 
   html += `<button type="button" onclick="runSummary()">Compute income comparison &amp; readiness</button>`;
 
@@ -615,7 +677,7 @@ function buildSummaryHtml(){
 
   html += `<div class="wizard-nav">
     <button type="button" class="btn-ghost" onclick="goBack()">&larr; Back</button>
-    <button type="button" onclick="goNext()">Next: Understand &rarr;</button>
+    <button type="button" onclick="goNext()">Next: Prepare packet &rarr;</button>
   </div>`;
   html += `</div>`;
   return html;
@@ -632,6 +694,7 @@ async function runSummary(){
   const hhid = hhidEl.value || "HH";
   const size = parseInt(hhsizeEl.value, 10) || 1;
   const required = reqEl.value.split(",").map(s => s.trim()).filter(Boolean);
+  state.hhid = hhid; state.hhsize = size; state.required = required; // carry forward to the Packet step
   const present = loadedDocTypes();
   const { sources, conflicts } = buildIncomeSourcesFromConfirmed();
   const conflictHtml = conflicts.length
@@ -645,9 +708,7 @@ async function runSummary(){
   const incomeResult = await post("/api/income", { household_size: size, threshold_pct: 60, income_sources: sources });
   incomeOut.innerHTML = incomeResult.error
     ? `<span class="badge review">${esc(incomeResult.error)}</span>`
-    : conflictHtml + `<h3 style="margin:14px 0 6px;font-size:14px">Income comparison</h3>` + comparisonHtml(incomeResult)
-      + (sources.length === 0 ? `<div class="muted" style="margin-top:6px">No confirmed income sources yet `
-          + `&mdash; see the warning above if a pay stub or benefit letter was loaded but not fully confirmed.</div>` : "");
+    : conflictHtml + `<h3 style="margin:14px 0 6px;font-size:14px">Income comparison</h3>` + comparisonHtml(incomeResult);
 
   const prep = await post("/api/prepare", {
     household_id: hhid,
@@ -673,6 +734,156 @@ async function runSummary(){
   html += `<div class="muted" style="margin-top:8px">${esc(prep.decision_boundary)}</div>`;
   html += `<div class="muted" style="margin-top:6px">Citations</div>` + (prep.citations || []).map(citeHtml).join("");
   prepOut.innerHTML = html;
+}
+
+/* ---------------- Step N+2: Prepare packet ---------------- */
+function buildPacketHtml(){
+  let html = `<div class="card">`;
+  html += `<h2>Prepare packet &mdash; checklist, income, and export</h2>`;
+  html += `<p class="hint">Combines your confirmed field values, the document checklist (present / missing / expired), `
+        + `and cited rules into one renter-facing packet. No raw document text is included, and nothing is sent `
+        + `anywhere automatically &mdash; you preview, edit, download, or delete it yourself.</p>`;
+
+  html += `<div class="row">
+    <div><label>Household id</label><input id="p-hhid" value="${esc(state.hhid || defaultHouseholdId())}"></div>
+    <div><label>Household size</label><input id="p-hhsize" type="number" min="1" value="${esc(state.hhsize || defaultHouseholdSize())}"></div>
+  </div>`;
+  html += `<label>Required document types (comma-separated, editable)</label>
+    <input id="p-required" value="${esc((state.required || loadedDocTypes()).join(", "))}">`;
+  html += `<button type="button" onclick="buildPacket()">Build / refresh packet</button>`;
+
+  html += `<div class="out" id="packet-out"></div>`;
+
+  html += `<div class="wizard-nav">
+    <button type="button" class="btn-ghost" onclick="goBack()">&larr; Back</button>
+    <button type="button" onclick="goNext()">Next: Understand &rarr;</button>
+  </div>`;
+  html += `</div>`;
+  return html;
+}
+
+function _checklistBadgeClass(status){
+  if (status === "present") return "ok";
+  if (status === "expired") return "safe";
+  return "review"; // missing
+}
+
+async function buildPacket(){
+  const hhidEl = document.getElementById("p-hhid");
+  const hhsizeEl = document.getElementById("p-hhsize");
+  const reqEl = document.getElementById("p-required");
+  const out = document.getElementById("packet-out");
+  if (!hhidEl || !hhsizeEl || !reqEl || !out) return; // not on this step anymore
+
+  const hhid = hhidEl.value || "HH";
+  const size = parseInt(hhsizeEl.value, 10) || 1;
+  const required = reqEl.value.split(",").map(s => s.trim()).filter(Boolean);
+  state.hhid = hhid; state.hhsize = size; state.required = required;
+
+  const present = loadedDocTypes();
+  const { sources, conflicts } = buildIncomeSourcesFromConfirmed();
+
+  out.innerHTML = "<span class='muted'>Building packet...</span>";
+
+  const prep = await post("/api/prepare", {
+    household_id: hhid, household_size: size,
+    required_document_types: required, present_document_types: present,
+    income_sources: sources, known_conflicts: conflicts.map(c => c.code)
+  });
+  if (prep.error){
+    out.innerHTML = `<span class="badge review">${esc(prep.error)}</span>`;
+    return;
+  }
+
+  // The packet is confirmed structured values only -- never raw document text,
+  // bbox coordinates, or the quarantined untrusted_instruction_text content.
+  const packet = {
+    household_id: hhid,
+    household_size: size,
+    documents: state.docs.map(d => ({
+      file_name: d.file_name,
+      document_type: d.document_type,
+      fields: (d.fields || [])
+        .filter(f => f.field !== "untrusted_instruction_text")
+        .map(f => ({ field: f.field, value: f.value, confidence: f.confidence, page: f.page, confirmed: !!f.confirmed })),
+    })),
+    document_status: prep.document_status || [],
+    income_comparison: prep.income_comparison,
+    citations: prep.citations || [],
+    decision_boundary: prep.decision_boundary,
+    generated_at: new Date().toISOString(),
+  };
+  state.packet = packet;
+
+  let html = `<div id="packet-printable">`;
+  html += `<h3 style="margin:14px 0 6px;font-size:14px">Checklist</h3>`;
+  html += packet.document_status.length
+    ? packet.document_status.map(d => {
+        const ageNote = d.max_age_days != null ? ` <span class="muted">(valid up to ${esc(d.max_age_days)} days)</span>` : "";
+        return `<div class="flag"><span class="badge ${_checklistBadgeClass(d.status)}">${esc(d.status.toUpperCase())}</span> `
+          + `<b>${esc(d.label)}</b>${ageNote}<br>${esc(d.detail)}</div>`;
+      }).join("")
+    : `<div class="muted">No checklist rows.</div>`;
+
+  html += `<h3 style="margin:14px 0 6px;font-size:14px">Income comparison</h3>` + comparisonHtml(packet.income_comparison);
+
+  html += `<h3 style="margin:14px 0 6px;font-size:14px">Confirmed document fields</h3>`;
+  packet.documents.forEach(d => {
+    html += `<div class="muted" style="margin-top:8px"><b>${esc(d.file_name)}</b> (${esc(d.document_type || "unknown type")})</div>`;
+    html += d.fields.length
+      ? `<table class="packet-doc-table"><tbody>` + d.fields.map(f =>
+          `<tr><td>${esc(f.field)}</td><td>${esc(f.value)}</td>`
+          + `<td class="muted">conf ${Number(f.confidence).toFixed(2)}</td>`
+          + `<td class="muted">${f.confirmed ? "confirmed" : "not confirmed"}</td></tr>`
+        ).join("") + `</tbody></table>`
+      : `<div class="muted">No fields.</div>`;
+  });
+
+  html += `<h3 style="margin:14px 0 6px;font-size:14px">Decision boundary</h3>`
+        + `<div class="muted">${esc(packet.decision_boundary)}</div>`;
+  html += `<div class="muted" style="margin-top:8px">Citations</div>` + packet.citations.map(citeHtml).join("");
+  html += `<div class="muted" style="margin-top:8px">Generated ${esc(packet.generated_at)}</div>`;
+  html += `</div>`; // #packet-printable
+
+  html += `<div class="row" style="margin-top:14px">
+    <button type="button" onclick="downloadPacketJson()">Download packet (JSON)</button>
+    <button type="button" onclick="window.print()">Download packet (PDF)</button>
+    <button type="button" class="btn-ghost" onclick="deleteSession()">Delete this session (wipe uploads &amp; data)</button>
+  </div>`;
+
+  out.innerHTML = html;
+}
+
+function downloadPacketJson(){
+  if (!state.packet) return;
+  const blob = new Blob([JSON.stringify(state.packet, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `realdoor-packet-${String(state.packet.household_id || "household").replace(/[^a-z0-9_-]/gi, "_")}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function deleteSession(){
+  try {
+    await post("/api/session/delete", { session_id: state.sessionId });
+  } catch (e) {
+    // best-effort: still reset client state even if the network call fails
+  }
+  state.docs = [];
+  state.allDocuments = state.allDocuments; // catalog of bundled docs is not session data, keep it
+  state.selectedBundled = new Set();
+  state.uploadFiles = [];
+  state.errors = [];
+  state.packet = null;
+  state.hhid = ""; state.hhsize = null; state.required = null;
+  state.step = 0;
+  state.sessionId = makeSessionId();
+  state.stepMessage = "All uploaded files and extracted data for this session have been deleted.";
+  render();
 }
 
 /* ---------------- Step N+3: understand ---------------- */
