@@ -57,6 +57,9 @@
   .wizard-nav { display:flex; justify-content:space-between; margin-top:20px; gap:10px; }
   .msg { margin:0 0 14px; padding:10px 14px; border-radius:8px; font-size:13px; }
   .msg.err { background:rgba(251,113,133,.1); border:1px solid var(--flag); color:var(--flag); }
+  .msg.warn { background:rgba(245,158,11,.1); border:1px solid var(--warn); color:#fde68a; }
+  .msg.warn ul { margin:6px 0 0; padding-left:18px; }
+  .msg.warn a.jump-link { color:var(--warn); text-decoration:underline; cursor:pointer; }
 
   /* Step 1: document picker */
   .doc-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px; margin-top:8px; }
@@ -221,6 +224,12 @@ function goNext(){
   persistCurrentDoc();
   const maxStep = state.docs.length + 2;
   if (state.step < maxStep) state.step += 1;
+  render();
+}
+function goToDocStep(fileName){
+  persistCurrentDoc();
+  const idx = state.docs.findIndex(d => d.file_name === fileName);
+  if (idx >= 0) state.step = idx + 1;
   render();
 }
 
@@ -523,18 +532,32 @@ function buildIncomeSourcesFromConfirmed(){
   return sources;
 }
 
+const INCOME_DOC_TYPES = ["pay_stub", "benefit_letter", "gig_statement"];
+
 function buildSummaryHtml(){
   const confirmedDocs = state.docs.filter(isDocConfirmed);
   const unconfirmedDocs = state.docs.filter(d => !isDocConfirmed(d));
+  const unconfirmedIncomeDocs = unconfirmedDocs.filter(d => INCOME_DOC_TYPES.includes(d.document_type));
+  const unconfirmedOtherDocs = unconfirmedDocs.filter(d => !INCOME_DOC_TYPES.includes(d.document_type));
 
   let html = `<div class="card">`;
   html += `<h2>Household summary &mdash; income &amp; readiness</h2>`;
   html += `<p class="hint">Aggregates only the CONFIRMED, possibly-edited values from the documents you reviewed. `
         + `This is a neutral comparison and a readiness checklist &mdash; never an eligibility verdict.</p>`;
 
+  const jumpLink = d => `<a class="jump-link" onclick="goToDocStep('${attrJs(d.file_name)}')">${esc(d.file_name)}</a>`;
+
+  if (unconfirmedIncomeDocs.length){
+    html += `<div class="msg warn"><b>Income may be understated:</b> the document(s) below still have at least one `
+          + `unconfirmed field, so this pay/benefit is NOT included in the comparison yet (ANY unchecked row excludes `
+          + `the whole document, even if its income fields are checked). Click a document to review and confirm it, `
+          + `then recompute.<ul>`
+          + unconfirmedIncomeDocs.map(d => `<li>${jumpLink(d)} (${esc(d.document_type)})</li>`).join("")
+          + `</ul></div>`;
+  }
   html += `<div class="muted" style="margin-bottom:10px">${confirmedDocs.length} of ${state.docs.length} document(s) confirmed.`;
-  if (unconfirmedDocs.length){
-    html += ` Not yet confirmed (excluded below): ` + unconfirmedDocs.map(d => esc(d.file_name)).join(", ") + ".";
+  if (unconfirmedOtherDocs.length){
+    html += ` Not yet confirmed: ` + unconfirmedOtherDocs.map(jumpLink).join(", ") + ".";
   }
   html += `</div>`;
 
@@ -582,7 +605,8 @@ async function runSummary(){
   incomeOut.innerHTML = incomeResult.error
     ? `<span class="badge review">${esc(incomeResult.error)}</span>`
     : `<h3 style="margin:14px 0 6px;font-size:14px">Income comparison</h3>` + comparisonHtml(incomeResult)
-      + (sources.length === 0 ? `<div class="muted" style="margin-top:6px">No confirmed income sources yet.</div>` : "");
+      + (sources.length === 0 ? `<div class="muted" style="margin-top:6px">No confirmed income sources yet `
+          + `&mdash; see the warning above if a pay stub or benefit letter was loaded but not fully confirmed.</div>` : "");
 
   const prep = await post("/api/prepare", {
     household_id: hhid,
