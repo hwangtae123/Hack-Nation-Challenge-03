@@ -64,3 +64,74 @@ PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python -m pytest rag/tests -q
 Source PDFs live in `corpus/raw/` and are git-ignored (vendor reference); the
 parsed cache (`corpus/cache/`) and built index (`index/`) are generated and also
 git-ignored.
+
+## Privacy & safety controls (the app, `app.py` + `templates/`)
+
+- **Session-scoped uploads.** Each browser session gets an opaque client-generated
+  id; uploaded PDFs live under `uploads/<session_id>/` and nowhere else.
+  `POST /api/session/delete` wipes that directory on request (the "Delete this
+  session" button in the Prepare step).
+- **Uploads are encrypted at rest.** `crypto.py` encrypts an uploaded PDF's
+  bytes (Fernet/AES) before it is ever written to `uploads/<session_id>/`.
+  Plaintext exists only in a short-lived temp file for the duration of a single
+  extraction or page-render request, then is deleted. Bundled demo documents
+  (public synthetic fixtures already in the repo) are not encrypted -- there is
+  nothing to protect by re-encrypting already-public content. Set
+  `UPLOAD_ENCRYPTION_KEY` (a `Fernet.generate_key()` value) as an environment
+  variable in production so encrypted uploads stay readable across restarts;
+  without it a key is generated per-process, which just means an in-flight
+  upload becomes unreadable after a restart -- the same practical effect as
+  the renter deleting the session.
+- **Never train on uploads.** Uploaded documents and extracted values are used
+  only to answer the current session's requests; they are never used to train
+  or fine-tune any model.
+- **No server-side packet storage.** The assembled packet (confirmed fields +
+  checklist + citations) is built and held in the browser only; downloading or
+  printing it happens client-side, with no server round-trip.
+- **Consent/action audit log, not a content log.** `audit_log.py` appends one
+  JSON line per action (document extracted, prepare run, rule question asked,
+  session deleted) plus the rule year/effective date in force at the time —
+  never the uploaded document text, extracted field values, or the renter's
+  question text. See `uploads/audit.jsonl` (git-ignored).
+
+## Discover (stretch goal, `discover.py`)
+
+`GET /api/properties` serves the organizer-provided one-metro LIHTC property
+subset (public HUD project-location data; no household/income/demographic
+fields exist in that file at all). The full, unfiltered set is always what
+you get with no query params; `city` and `bedroom_type` (repeatable) are
+renter-selected filters only, never inferred. Every listing is stamped
+`"availability": "unknown"` (a constant, never computed) and cites
+`HUD-DATA-001` / `HUD-GEO-001`. Order is a fixed alphabetical sort by project
+name -- never a relevance/acceptance ranking.
+
+## Deployment (GCP Compute Engine)
+
+The demo runs as a systemd-managed gunicorn service on a single e2-micro VM
+(no GitHub involved in the deploy path, so the organizer starter pack never
+has to be pushed to a public repo):
+
+```bash
+# from the repo root, package everything the app needs at runtime (excludes
+# .git, __pycache__, rag/uploads, .env, and corpus/raw -- the source PDFs are
+# only needed to rebuild the index, not to serve it)
+tar --exclude='./.git' --exclude='__pycache__' --exclude='.pytest_cache' \
+    --exclude='./rag/uploads' --exclude='./.env' --exclude='./rag/corpus/raw' \
+    -czf /tmp/realdoor-deploy.tar.gz .
+
+gcloud compute scp /tmp/realdoor-deploy.tar.gz realdoor-demo:realdoor-deploy.tar.gz --zone=us-central1-a
+gcloud compute ssh realdoor-demo --zone=us-central1-a --command="
+  mkdir -p ~/app && tar -xzf ~/realdoor-deploy.tar.gz -C ~/app
+  cd ~/app && python3 -m venv venv && source venv/bin/activate
+  pip install -r requirements.txt -r rag/requirements.txt
+  sudo systemctl restart realdoor.service
+"
+```
+
+`/etc/realdoor.env` on the VM holds `OPENAI_API_KEY` and a persistent
+`UPLOAD_ENCRYPTION_KEY` (systemd `EnvironmentFile=`); `/etc/systemd/system/realdoor.service`
+runs `gunicorn --bind 0.0.0.0:8000 rag.app:app` and restarts on failure or
+reboot (`systemctl enable`d). A firewall rule (`realdoor-demo-http`) opens
+`tcp:8000` from `0.0.0.0/0`. The pre-built `rag/index/` + `rag/corpus/cache/`
+were shipped as part of the tarball, so no OpenAI-dependent build step runs on
+the server itself.

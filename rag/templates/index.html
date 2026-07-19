@@ -11,6 +11,7 @@
   body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
          background:var(--bg); color:var(--ink); line-height:1.5; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h2#step-heading:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
   header { padding:20px 24px; border-bottom:1px solid var(--line); }
   h1 { margin:0 0 4px; font-size:20px; }
   .scope { color:var(--muted); font-size:13px; }
@@ -47,6 +48,8 @@
   .kv { color:var(--muted); } .kv b { color:var(--ink); }
   .muted { color:var(--muted); font-size:12px; }
   code { background:#0b1220; padding:1px 5px; border-radius:4px; }
+  .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+             clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 
   /* Wizard chrome */
   .steps-bar { display:flex; gap:8px; margin:16px 0 6px; }
@@ -116,6 +119,9 @@
   It extracts and lets you confirm document data, explains what the rules require,
   annualizes documented income, and compares it with the frozen threshold so a
   <b>human reviewer</b> can decide.
+  Uploaded documents and extracted values are never used to train any model, and
+  are kept only for this session -- use <b>Delete this session</b> in the Prepare
+  step at any time to erase them.
   {% if not index_ready %}<br><b>Note:</b> the rule index is not built yet - run <code>python -m rag.build_index</code> to enable the Understand step.{% endif %}
 </div>
 
@@ -197,6 +203,9 @@ const state = {
   hhsize: null,
   required: null,        // array | null (null = not yet set, use loadedDocTypes())
   packet: null,          // last assembled packet object (Prepare packet step)
+  discoverCities: [],           // distinct project cities, for the Discover city filter
+  discoverFilters: { city: "", bedroomTypes: [] },  // renter-selected filters only
+  discoverResult: null,         // last /api/properties response (Discover step)
 };
 
 window.addEventListener("DOMContentLoaded", async () => {
@@ -207,15 +216,33 @@ window.addEventListener("DOMContentLoaded", async () => {
   } catch (e) {
     state.allDocuments = [];
   }
+  try {
+    const r2 = await fetch("/api/properties/cities");
+    const d2 = await r2.json();
+    state.discoverCities = d2.cities || [];
+  } catch (e) {
+    state.discoverCities = [];
+  }
   render();
 });
 
 /* ---------------- master render ---------------- */
+// Every render() rebuilds the whole wizard subtree, which would otherwise drop
+// keyboard focus back to <body> on each interaction. We restore it two ways:
+//  - step transitions (Next/Back/jump): focus moves to the new step's heading,
+//    like a page navigation -- this is the expected pattern, not a loss.
+//  - in-place updates on the SAME step (e.g. checking a document checkbox):
+//    focus is restored to the element with the same id, so the control the
+//    user just activated stays focused.
+let _lastRenderedStep = null;
 function render(){
   const root = document.getElementById("wizard-root");
+  const stepChanged = _lastRenderedStep !== state.step;
+  const activeId = (!stepChanged && document.activeElement && document.activeElement.id)
+    ? document.activeElement.id : null;
   let html = stepIndicatorHtml();
   if (state.errors.length){
-    html += `<div class="msg err">Some documents could not be processed: `
+    html += `<div class="msg err" role="alert">Some documents could not be processed: `
       + state.errors.map(e => `${esc(e.file)}: ${esc(e.error)}`).join("; ")
       + ` <button type="button" class="btn-ghost" style="margin:0 0 0 8px;padding:2px 8px" onclick="dismissErrors()">dismiss</button></div>`;
   }
@@ -228,8 +255,10 @@ function render(){
     html += buildSummaryHtml();
   } else if (state.step === N + 2){
     html += buildPacketHtml();
-  } else {
+  } else if (state.step === N + 3){
     html += buildUnderstandHtml();
+  } else {
+    html += buildDiscoverHtml();
   }
   root.innerHTML = html;
   if (state.step === N + 1 && N > 0){
@@ -238,19 +267,31 @@ function render(){
   if (state.step === N + 2 && N > 0){
     buildPacket(); // auto-build so the packet is visible on arrival; button re-runs after edits
   }
+  if (state.step === N + 4 && N > 0){
+    runDiscover(); // auto-load the unfiltered directory on arrival; filters re-run it after
+  }
+  if (stepChanged){
+    const heading = document.getElementById("step-heading");
+    if (heading) heading.focus();
+  } else if (activeId){
+    const el = document.getElementById(activeId);
+    if (el) el.focus();
+  }
+  _lastRenderedStep = state.step;
 }
 function dismissErrors(){ state.errors = []; render(); }
 
 function stepIndicatorHtml(){
   const N = state.docs.length;
-  const phases = ["Add documents", "Review documents", "Household summary", "Prepare packet", "Understand rules"];
+  const phases = ["Add documents", "Review documents", "Household summary", "Prepare packet", "Understand rules", "Discover properties"];
   let phaseIdx, sub = "";
   if (state.step === 0){ phaseIdx = 0; }
   else if (state.step <= N){ phaseIdx = 1; sub = `Document ${state.step} of ${N}`; }
   else if (state.step === N + 1){ phaseIdx = 2; }
   else if (state.step === N + 2){ phaseIdx = 3; }
-  else { phaseIdx = 4; }
-  const total = N + 4;
+  else if (state.step === N + 3){ phaseIdx = 4; }
+  else { phaseIdx = 5; }
+  const total = N + 5;
   let html = `<div class="steps-bar">` + phases.map((p, i) => {
     const cls = i === phaseIdx ? "active" : (i < phaseIdx ? "done" : "");
     return `<div class="step-pill ${cls}">${i + 1}. ${esc(p)}</div>`;
@@ -282,7 +323,7 @@ function goBack(){
 function goNext(){
   persistCurrentDoc();
   persistSummaryInputs();
-  const maxStep = state.docs.length + 3;
+  const maxStep = state.docs.length + 4;
   if (state.step < maxStep) state.step += 1;
   render();
 }
@@ -335,15 +376,15 @@ function removeUploadChip(idx){
 
 function buildStep1Html(){
   let html = `<div class="card">`;
-  html += `<h2>Step 1 — Add documents</h2>`;
+  html += `<h2 id="step-heading" tabindex="-1">Step 1 — Add documents</h2>`;
   html += `<p class="hint">Load bundled synthetic documents (by household, or pick individually) and/or upload your own PDFs — combine both. `
         + `Nothing is extracted until you click &ldquo;Extract &amp; continue&rdquo;.</p>`;
 
-  if (state.stepMessage) html += `<div class="msg err">${esc(state.stepMessage)}</div>`;
+  if (state.stepMessage) html += `<div class="msg err" role="alert">${esc(state.stepMessage)}</div>`;
   if (state.loading) html += `<div class="msg" style="border:1px solid var(--line);color:var(--muted)">Extracting selected documents...</div>`;
 
   html += `<div class="row">
-    <div><label>Household</label>
+    <div><label for="hh-select">Household</label>
       <select id="hh-select">${uniqueHouseholds().map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join("")}</select>
     </div>
     <button type="button" onclick="loadHousehold()">Load all documents for this household</button>
@@ -358,7 +399,8 @@ function buildStep1Html(){
       html += `<div class="hh-group"><h4>${esc(hh)}</h4>`;
       docs.forEach(d => {
         const checked = state.selectedBundled.has(d.file_name) ? "checked" : "";
-        html += `<label class="doc-check-row"><input type="checkbox" ${checked} `
+        const chkId = "chk-" + esc(d.file_name);
+        html += `<label class="doc-check-row" for="${chkId}"><input type="checkbox" id="${chkId}" ${checked} `
               + `onchange="toggleBundled('${attrJs(d.file_name)}', this.checked)"> ${esc(d.file_name)} `
               + `<span class="muted">&mdash; ${esc(d.document_type || "unknown type")}</span></label>`;
       });
@@ -367,7 +409,7 @@ function buildStep1Html(){
     html += `</div>`;
   }
 
-  html += `<label style="margin-top:16px">Upload PDFs (one or many)</label>
+  html += `<label for="upload-input" style="margin-top:16px">Upload PDFs (one or many)</label>
     <input id="upload-input" type="file" multiple accept=".pdf" onchange="onUploadFilesChosen(this)">`;
 
   const totalSelected = state.selectedBundled.size + state.uploadFiles.length;
@@ -458,7 +500,7 @@ function buildDocReviewHtml(idx){
   const source = doc.source === "upload" ? "upload" : "dataset";
 
   let html = `<div class="card">`;
-  html += `<h2>Document ${k} of ${N} &mdash; ${esc(doc.file_name)} (${esc(doc.document_type || "unknown type")})</h2>`;
+  html += `<h2 id="step-heading" tabindex="-1">Document ${k} of ${N} &mdash; ${esc(doc.file_name)} (${esc(doc.document_type || "unknown type")})</h2>`;
   html += `<span class="badge ${badgeClass}">${esc(doc.status)}</span> `;
   html += `<span class="muted">${doc.household_id ? esc(doc.household_id) + " &middot; " : ""}${source === "upload" ? "uploaded" : "bundled dataset"}</span>`;
 
@@ -477,16 +519,22 @@ function buildDocReviewHtml(idx){
 
   if (!isOcr){
     if (normalFields.length){
-      html += `<table class="ftable" id="doc-review"><thead><tr><th>Field</th><th>Value</th><th>Confidence</th><th>Page</th><th>Confirm</th></tr></thead><tbody>`;
+      html += `<table class="ftable" id="doc-review"><thead><tr>`
+            + `<th scope="col">Field</th><th scope="col">Value</th><th scope="col">Confidence</th>`
+            + `<th scope="col">Page</th><th scope="col">Confirm</th></tr></thead><tbody>`;
       normalFields.forEach(f => {
         const conf = f.confidence == null ? 0 : f.confidence;
         const pct = Math.round(conf * 100);
+        const valId = "val-" + esc(doc.file_name) + "-" + esc(f.field);
+        const cbId = "cb-" + esc(doc.file_name) + "-" + esc(f.field);
         html += `<tr class="field-row" data-field="${esc(f.field)}">
           <td>${esc(f.field)}</td>
-          <td><input type="text" class="field-value-input" value="${esc(f.value)}"></td>
+          <td><label class="sr-only" for="${valId}">Value for ${esc(f.field)}</label>
+              <input id="${valId}" type="text" class="field-value-input" value="${esc(f.value)}"></td>
           <td><span class="conf-track"><span class="conf-fill" style="width:${pct}%"></span></span>${conf.toFixed(2)}</td>
           <td>${esc(f.page)}</td>
-          <td><input type="checkbox" class="field-confirm-cb" ${f.confirmed ? "checked" : ""} onchange="updateDocGate()"></td>
+          <td><label class="sr-only" for="${cbId}">Confirm ${esc(f.field)}</label>
+              <input id="${cbId}" type="checkbox" class="field-confirm-cb" ${f.confirmed ? "checked" : ""} onchange="updateDocGate()"></td>
         </tr>`;
       });
       html += `</tbody></table>`;
@@ -640,14 +688,14 @@ function buildSummaryHtml(){
   const unconfirmedOtherDocs = unconfirmedDocs.filter(d => !INCOME_DOC_TYPES.includes(d.document_type));
 
   let html = `<div class="card">`;
-  html += `<h2>Household summary &mdash; income &amp; readiness</h2>`;
+  html += `<h2 id="step-heading" tabindex="-1">Household summary &mdash; income &amp; readiness</h2>`;
   html += `<p class="hint">Aggregates only the CONFIRMED, possibly-edited values from the documents you reviewed. `
         + `This is a neutral comparison and a readiness checklist &mdash; never an eligibility verdict.</p>`;
 
   const jumpLink = d => `<a class="jump-link" onclick="goToDocStep('${attrJs(d.file_name)}')">${esc(d.file_name)}</a>`;
 
   if (unconfirmedIncomeDocs.length){
-    html += `<div class="msg warn"><b>Income may be understated:</b> the document(s) below still have at least one `
+    html += `<div class="msg warn" role="status"><b>Income may be understated:</b> the document(s) below still have at least one `
           + `unconfirmed field, so this pay/benefit is NOT included in the comparison yet (ANY unchecked row excludes `
           + `the whole document, even if its income fields are checked). Click a document to review and confirm it, `
           + `then recompute.<ul>`
@@ -661,13 +709,13 @@ function buildSummaryHtml(){
   html += `</div>`;
 
   html += `<div class="row">
-    <div><label>Household id</label><input id="s-hhid" value="${esc(state.hhid || defaultHouseholdId())}"></div>
-    <div><label>Household size</label><input id="s-hhsize" type="number" min="1" value="${esc(state.hhsize || defaultHouseholdSize())}"></div>
+    <div><label for="s-hhid">Household id</label><input id="s-hhid" value="${esc(state.hhid || defaultHouseholdId())}"></div>
+    <div><label for="s-hhsize">Household size</label><input id="s-hhsize" type="number" min="1" value="${esc(state.hhsize || defaultHouseholdSize())}"></div>
   </div>`;
 
-  html += `<label style="margin-top:12px">Present document types (loaded)</label>`
-        + `<div class="muted" style="margin-bottom:6px">${esc(loadedDocTypes().join(", ") || "(none)")}</div>`;
-  html += `<label>Required document types (comma-separated, editable)</label>
+  html += `<div id="s-present-label" style="margin-top:12px;font-size:12px;color:var(--muted)">Present document types (loaded)</div>`
+        + `<div class="muted" style="margin-bottom:6px" aria-labelledby="s-present-label">${esc(loadedDocTypes().join(", ") || "(none)")}</div>`;
+  html += `<label for="s-required">Required document types (comma-separated, editable)</label>
     <input id="s-required" value="${esc((state.required || loadedDocTypes()).join(", "))}">`;
 
   html += `<button type="button" onclick="runSummary()">Compute income comparison &amp; readiness</button>`;
@@ -698,7 +746,7 @@ async function runSummary(){
   const present = loadedDocTypes();
   const { sources, conflicts } = buildIncomeSourcesFromConfirmed();
   const conflictHtml = conflicts.length
-    ? `<div class="msg warn"><b>Pay stub conflict detected:</b><ul>`
+    ? `<div class="msg warn" role="status"><b>Pay stub conflict detected:</b><ul>`
       + conflicts.map(c => `<li>${esc(c.detail)}</li>`).join("") + `</ul></div>`
     : "";
 
@@ -739,16 +787,16 @@ async function runSummary(){
 /* ---------------- Step N+2: Prepare packet ---------------- */
 function buildPacketHtml(){
   let html = `<div class="card">`;
-  html += `<h2>Prepare packet &mdash; checklist, income, and export</h2>`;
+  html += `<h2 id="step-heading" tabindex="-1">Prepare packet &mdash; checklist, income, and export</h2>`;
   html += `<p class="hint">Combines your confirmed field values, the document checklist (present / missing / expired), `
         + `and cited rules into one renter-facing packet. No raw document text is included, and nothing is sent `
         + `anywhere automatically &mdash; you preview, edit, download, or delete it yourself.</p>`;
 
   html += `<div class="row">
-    <div><label>Household id</label><input id="p-hhid" value="${esc(state.hhid || defaultHouseholdId())}"></div>
-    <div><label>Household size</label><input id="p-hhsize" type="number" min="1" value="${esc(state.hhsize || defaultHouseholdSize())}"></div>
+    <div><label for="p-hhid">Household id</label><input id="p-hhid" value="${esc(state.hhid || defaultHouseholdId())}"></div>
+    <div><label for="p-hhsize">Household size</label><input id="p-hhsize" type="number" min="1" value="${esc(state.hhsize || defaultHouseholdSize())}"></div>
   </div>`;
-  html += `<label>Required document types (comma-separated, editable)</label>
+  html += `<label for="p-required">Required document types (comma-separated, editable)</label>
     <input id="p-required" value="${esc((state.required || loadedDocTypes()).join(", "))}">`;
   html += `<button type="button" onclick="buildPacket()">Build / refresh packet</button>`;
 
@@ -889,14 +937,113 @@ async function deleteSession(){
 /* ---------------- Step N+3: understand ---------------- */
 function buildUnderstandHtml(){
   let html = `<div class="card">`;
-  html += `<h2>Understand &mdash; ask a rule question</h2>`;
+  html += `<h2 id="step-heading" tabindex="-1">Understand &mdash; ask a rule question</h2>`;
   html += `<p class="hint">Answers only from cited corpus prose; abstains if no rule matches.</p>`;
-  html += `<label>Question</label><textarea id="u-q">${esc(state.question)}</textarea>`;
+  html += `<label for="u-q">Question</label><textarea id="u-q">${esc(state.question)}</textarea>`;
   html += `<button type="button" onclick="askUnderstand()">Ask</button>`;
   html += `<div class="out" id="understand-out"></div>`;
+  html += `<div class="wizard-nav">
+    <button type="button" class="btn-ghost" onclick="goBack()">&larr; Back</button>
+    <button type="button" onclick="goNext()">Next: Discover properties (optional) &rarr;</button>
+  </div>`;
+  html += `</div>`;
+  return html;
+}
+
+/* ---------------- Step N+4: Discover (stretch goal) ---------------- */
+const BEDROOM_LABELS = { studio: "Studio", one: "1 BR", two: "2 BR", three: "3 BR", four: "4 BR" };
+
+function buildDiscoverHtml(){
+  let html = `<div class="card">`;
+  html += `<h2 id="step-heading" tabindex="-1">Discover properties (optional) &mdash; public LIHTC location directory</h2>`;
+  html += `<p class="hint">HUD's public LIHTC property locations for this metro &mdash; a directory, not a live `
+        + `vacancy or application feed. Availability is always shown as unknown. Filters below are entirely your `
+        + `choice; the full unfiltered list is shown until you apply one.</p>`;
+
+  html += `<div class="row">
+    <div><label for="d-city">City (optional filter)</label>
+      <select id="d-city"><option value="">All cities</option>`
+        + (state.discoverCities || []).map(c =>
+            `<option value="${esc(c)}" ${state.discoverFilters.city === c ? "selected" : ""}>${esc(c)}</option>`
+          ).join("")
+        + `</select>
+    </div>
+  </div>`;
+
+  html += `<label style="margin-top:10px">Bedroom size (optional filter, any that apply)</label><div>`;
+  html += Object.entries(BEDROOM_LABELS).map(([key, label]) => {
+    const checked = (state.discoverFilters.bedroomTypes || []).includes(key) ? "checked" : "";
+    const id = "d-bed-" + key;
+    return `<label class="doc-check-row" for="${id}" style="display:inline-flex;margin-right:14px">`
+      + `<input type="checkbox" id="${id}" value="${key}" ${checked} class="d-bed-cb"> ${label}</label>`;
+  }).join("");
+  html += `</div>`;
+
+  html += `<div class="row" style="margin-top:10px">
+    <button type="button" onclick="applyDiscoverFilters()">Show properties</button>
+    <button type="button" class="btn-ghost" onclick="clearDiscoverFilters()">Clear filters (show all)</button>
+  </div>`;
+
+  html += `<div class="out" id="discover-out"></div>`;
+
   html += `<div class="wizard-nav"><button type="button" class="btn-ghost" onclick="goBack()">&larr; Back</button><span></span></div>`;
   html += `</div>`;
   return html;
+}
+
+function discoverResultHtml(result){
+  let html = `<div class="muted" style="margin-bottom:8px">Showing ${result.properties.length} of `
+    + `${result.total_unfiltered} properties in the directory.</div>`;
+  if (!result.properties.length){
+    html += `<div class="muted">No properties match this filter.</div>`;
+  } else {
+    html += `<table class="ftable"><thead><tr>`
+      + `<th scope="col">Project</th><th scope="col">Address</th>`
+      + `<th scope="col">Units (total / low-income)</th><th scope="col">Unit mix (studio/1/2/3/4 BR)</th>`
+      + `<th scope="col">Placed in service</th><th scope="col">Availability</th></tr></thead><tbody>`;
+    result.properties.forEach(p => {
+      const addr = `${p.project_address || ""}, ${p.project_city || ""} ${p.project_state || ""} ${p.project_zip || ""}`;
+      const mix = ["studio_units", "one_bedroom_units", "two_bedroom_units", "three_bedroom_units", "four_bedroom_units"]
+        .map(k => p[k] == null ? "-" : p[k]).join(" / ");
+      html += `<tr><td>${esc(p.project_name)}</td><td>${esc(addr)}</td>`
+        + `<td>${p.total_units == null ? "-" : esc(p.total_units)} / ${p.low_income_units == null ? "-" : esc(p.low_income_units)}</td>`
+        + `<td>${esc(mix)}</td><td>${esc(p.year_placed_in_service || "-")}</td>`
+        + `<td><span class="badge safe">UNKNOWN</span></td></tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+  html += `<div class="muted" style="margin-top:10px">${esc(result.availability_note)}</div>`;
+  html += `<div class="muted" style="margin-top:6px">Citations</div>` + (result.citations || []).map(citeHtml).join("");
+  return html;
+}
+
+async function runDiscover(){
+  const out = document.getElementById("discover-out");
+  if (!out) return; // not on this step anymore
+  out.innerHTML = "<span class='muted'>Loading properties...</span>";
+  const params = new URLSearchParams();
+  if (state.discoverFilters.city) params.set("city", state.discoverFilters.city);
+  (state.discoverFilters.bedroomTypes || []).forEach(b => params.append("bedroom_type", b));
+  try {
+    const r = await fetch("/api/properties?" + params.toString());
+    const result = await r.json();
+    state.discoverResult = result;
+    out.innerHTML = discoverResultHtml(result);
+  } catch (e) {
+    out.innerHTML = `<span class="badge review">Could not load the property directory.</span>`;
+  }
+}
+
+function applyDiscoverFilters(){
+  const cityEl = document.getElementById("d-city");
+  state.discoverFilters.city = cityEl ? cityEl.value : "";
+  state.discoverFilters.bedroomTypes = Array.from(document.querySelectorAll(".d-bed-cb:checked")).map(cb => cb.value);
+  runDiscover();
+}
+
+function clearDiscoverFilters(){
+  state.discoverFilters = { city: "", bedroomTypes: [] };
+  render(); // rebuilds the form with cleared selections; render()'s post-render hook re-runs the query
 }
 async function askUnderstand(){
   const q = document.getElementById("u-q").value;

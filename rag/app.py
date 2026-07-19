@@ -1,9 +1,12 @@
-"""Unified RealDoor demo (Flask): Profile (extraction) + Understand + Prepare.
+"""Unified RealDoor demo (Flask): Profile (extraction) + Understand + Prepare
+(+ the optional Discover stretch goal).
 
 This wires the Stage 1 extraction pipeline (``src/``) into the RAG demo so a user
 can pick or upload a synthetic income document, see the extracted fields with
 their source boxes and confidence, confirm them (nothing flows downstream until
 confirmed), and then run the neutral income comparison and readiness check.
+Discover (``/api/properties``) is unrelated to a renter's own documents: it is
+a read-only, public-data property directory (see ``rag/discover.py``).
 
 Endpoints (all English output, no eligibility verdict anywhere):
   GET    /                    the single-page UI
@@ -16,6 +19,7 @@ Endpoints (all English output, no eligibility verdict anywhere):
   POST   /api/income          neutral annualized-income vs. threshold comparison
   POST   /api/prepare         deterministic document-readiness + checklist grid
   POST   /api/session/delete  wipe an upload session's files from disk
+  GET    /api/properties      (stretch: Discover) transparent LIHTC property directory
 
 Data-handling guardrail: nothing in this module ever calls out to a property
 management system, landlord, or other third party -- there is no outbound
@@ -31,15 +35,19 @@ from __future__ import annotations
 import io
 import re
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import pdfplumber
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from PIL import ImageDraw
 from werkzeug.utils import secure_filename
 
+from rag import crypto
+from rag.audit_log import log_event
 from rag.calculate import IncomeSource, summarize_income
+from rag.discover import available_cities, discover_properties
 from rag.index import index_exists
 from rag.prepare import assess_readiness
 from rag.understand import answer_question
@@ -77,14 +85,46 @@ def _session_dir(session_id: str) -> Path:
     return path
 
 
-def _safe_doc_path(file_name: str, source: str, session_id: str = "") -> Path:
-    """Resolve a document path, refusing anything outside the allowed folders."""
+def _safe_doc_path(file_name: str) -> Path:
+    """Resolve a bundled dataset document path, refusing anything outside it.
+
+    Dataset documents are public synthetic fixtures shipped with the repo;
+    they are never encrypted (see ``crypto.py`` for why only uploads are).
+    """
     name = secure_filename(file_name)
-    base = _session_dir(session_id) if source == "upload" else doc_config.DOCUMENTS_DIR
-    path = (base / name).resolve()
-    if not str(path).startswith(str(Path(base).resolve())) or not path.exists():
+    path = (doc_config.DOCUMENTS_DIR / name).resolve()
+    if not str(path).startswith(str(doc_config.DOCUMENTS_DIR.resolve())) or not path.exists():
         abort(404, description="Document not found.")
     return path
+
+
+def _uploaded_enc_path(file_name: str, session_id: str) -> Path:
+    """Resolve an uploaded (encrypted-at-rest) document's on-disk path."""
+    name = secure_filename(file_name)
+    path = (_session_dir(session_id) / (name + ".enc")).resolve()
+    if not str(path).startswith(str(UPLOADS_DIR.resolve())) or not path.exists():
+        abort(404, description="Document not found.")
+    return path
+
+
+@contextmanager
+def _resolve_for_processing(file_name: str, source: str, session_id: str = "") -> Iterator[Path]:
+    """Yield a plaintext path to process, for the duration of the ``with`` block.
+
+    Dataset documents are bundled plaintext fixtures and are opened directly.
+    Uploaded documents are encrypted at rest; this decrypts to a short-lived
+    temp file that is deleted as soon as the block exits.
+    """
+    if source == "upload":
+        name = secure_filename(file_name)
+        enc_path = _uploaded_enc_path(file_name, session_id)
+        try:
+            with crypto.decrypted_copy(enc_path, name) as plain_path:
+                yield plain_path
+        except crypto.DecryptionError as exc:
+            abort(410, description=str(exc))
+    else:
+        yield _safe_doc_path(file_name)
 
 
 def _income_sources(raw: list[dict[str, Any]]) -> list[IncomeSource]:
@@ -129,8 +169,10 @@ def api_extract():
     file_name = (request.get_json(silent=True) or {}).get("file_name", "")
     if not file_name:
         return jsonify(error="file_name is required."), 400
-    path = _safe_doc_path(file_name, "dataset")
-    return jsonify(_extract_response(path))
+    path = _safe_doc_path(file_name)
+    data = _extract_response(path)
+    log_event("document_extract", source="dataset", document_type=data.get("document_type"), file_count=1)
+    return jsonify(data)
 
 
 @app.post("/api/extract_batch")
@@ -139,7 +181,13 @@ def api_extract_batch():
     names = (request.get_json(silent=True) or {}).get("file_names", [])
     if not names:
         return jsonify(error="file_names is required."), 400
-    documents = [_extract_response(_safe_doc_path(n, "dataset")) for n in names]
+    documents = [_extract_response(_safe_doc_path(n)) for n in names]
+    log_event(
+        "document_extract",
+        source="dataset",
+        file_count=len(documents),
+        document_types=[d.get("document_type") for d in documents],
+    )
     return jsonify(documents=documents)
 
 
@@ -176,12 +224,22 @@ def api_upload():
             errors.append({"file": file.filename, "error": "Only PDF documents are supported."})
             continue
         name = secure_filename(file.filename)
-        dest = session_dir / name
-        file.save(str(dest))
-        # A per-file type override only applies to a single upload.
-        data = _extract_response(dest, document_type=override if len(files) == 1 else None)
+        dest = session_dir / (name + ".enc")
+        dest.write_bytes(crypto.encrypt_bytes(file.read()))  # encrypted at rest; see crypto.py
+        # A per-file type override only applies to a single upload. The decrypted
+        # plaintext exists only for this block, in a temp file, then is removed.
+        with crypto.decrypted_copy(dest, name) as plain_path:
+            data = _extract_response(plain_path, document_type=override if len(files) == 1 else None)
         data["source"] = "upload"
         documents.append(data)
+    log_event(
+        "document_extract",
+        session_id=session_id,
+        source="upload",
+        file_count=len(documents),
+        document_types=[d.get("document_type") for d in documents],
+        error_count=len(errors),
+    )
     return jsonify(documents=documents, errors=errors)
 
 
@@ -198,6 +256,7 @@ def api_session_delete():
     session_dir = _session_dir(session_id)
     if session_dir.exists():
         shutil.rmtree(session_dir)
+    log_event("session_delete", session_id=session_id)
     return jsonify(deleted=True, session_id=session_id)
 
 
@@ -206,39 +265,49 @@ def api_page_png():
     file_name = request.args.get("file", "")
     source = request.args.get("source", "dataset")
     session_id = request.args.get("session_id", "")
-    path = _safe_doc_path(file_name, source, session_id)
-    profile = build_profile(path)
-    with pdfplumber.open(str(path)) as pdf:
-        page = pdf.pages[0]
-        height = page.height
-        rendered = page.to_image(resolution=110)
-        img = rendered.original.convert("RGB")
-        scale = img.width / page.width
-        draw = ImageDraw.Draw(img)
-        for f in profile.fields:
-            if not f.bbox or len(f.bbox) != 4:
-                continue  # OCR-extracted fields have no per-field box to draw
-            is_q = f.field == "untrusted_instruction_text"
-            color = _QUARANTINE_COLOR if is_q else _FIELD_COLOR
-            x0, y0, x1, y1 = f.bbox  # bottom-left origin
-            rect = [x0 * scale, (height - y1) * scale, x1 * scale, (height - y0) * scale]
-            draw.rectangle(rect, outline=color, width=2)
-            label = "INJECTION" if is_q else f.field
-            draw.text((rect[0], max(0, rect[1] - 11)), label, fill=color)
     buf = io.BytesIO()
-    img.save(buf, "PNG")
+    with _resolve_for_processing(file_name, source, session_id) as path:
+        profile = build_profile(path)
+        with pdfplumber.open(str(path)) as pdf:
+            page = pdf.pages[0]
+            height = page.height
+            rendered = page.to_image(resolution=110)
+            img = rendered.original.convert("RGB")
+            scale = img.width / page.width
+            draw = ImageDraw.Draw(img)
+            for f in profile.fields:
+                if not f.bbox or len(f.bbox) != 4:
+                    continue  # OCR-extracted fields have no per-field box to draw
+                is_q = f.field == "untrusted_instruction_text"
+                color = _QUARANTINE_COLOR if is_q else _FIELD_COLOR
+                x0, y0, x1, y1 = f.bbox  # bottom-left origin
+                rect = [x0 * scale, (height - y1) * scale, x1 * scale, (height - y0) * scale]
+                draw.rectangle(rect, outline=color, width=2)
+                label = "INJECTION" if is_q else f.field
+                draw.text((rect[0], max(0, rect[1] - 11)), label, fill=color)
+        img.save(buf, "PNG")
     buf.seek(0)
     return send_file(buf, mimetype="image/png")
 
 
 @app.post("/api/understand")
 def api_understand():
+    # The question text itself is never logged (it is renter-entered free
+    # text and may describe personal circumstances); only the outcome shape is.
     question = (request.get_json(silent=True) or {}).get("question", "").strip()
     if not question:
         return jsonify(error="A question is required."), 400
     try:
-        return jsonify(answer_question(question).to_dict())
+        answer = answer_question(question)
+        log_event(
+            "understand_query",
+            abstained=answer.abstained,
+            safety_intercept=answer.safety_intercept,
+            citation_count=len(answer.citations),
+        )
+        return jsonify(answer.to_dict())
     except FileNotFoundError:
+        log_event("understand_query", abstained=True, safety_intercept=None, citation_count=0, index_missing=True)
         return jsonify(
             question=question,
             answer="The rule index has not been built yet. Run "
@@ -278,8 +347,41 @@ def api_prepare():
         )
     except (KeyError, ValueError) as exc:
         return jsonify(error=f"Invalid input: {exc}"), 400
+    log_event(
+        "prepare_run",
+        household_id=assessment.household_id,
+        readiness_status=assessment.readiness_status,
+        flag_codes=[f.code for f in assessment.flags],
+    )
     return jsonify(assessment.to_dict())
 
 
+@app.get("/api/properties")
+def api_properties():
+    """Stretch goal: Discover. Renter-selected filters only; the unfiltered
+    set is always available (no filters = everything); availability is always
+    "unknown"; order is a fixed alphabetical sort, never a ranking or a
+    prediction of acceptance/fit. See rag/discover.py for the boundaries.
+    """
+    city = request.args.get("city") or None
+    bedroom_types = [b for b in request.args.getlist("bedroom_type") if b]
+    result = discover_properties(city=city, bedroom_types=bedroom_types)
+    log_event(
+        "discover_query",
+        city=city,
+        bedroom_types=bedroom_types,
+        result_count=len(result.properties),
+    )
+    return jsonify(result.to_dict())
+
+
+@app.get("/api/properties/cities")
+def api_property_cities():
+    return jsonify(cities=available_cities())
+
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    import os
+
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)

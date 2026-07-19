@@ -15,6 +15,7 @@ Scope is frozen: LIHTC / Boston-Cambridge-Quincy, MA-NH HMFA / FY2026.
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -167,17 +168,26 @@ def _env() -> dict[str, str | None]:
     return dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
 
 
+def get_env(key: str) -> Optional[str]:
+    """Return a config value: the real process environment first (e.g. a
+    hosting platform's dashboard-configured secret, which is how deployments
+    like Render supply these -- there is no .env file on the server), falling
+    back to the repo-root .env file for local development convenience.
+    """
+    return os.environ.get(key) or _env().get(key)
+
+
 def get_openai_api_key() -> str:
-    """Return the OpenAI API key from .env (stored as OPEN_AI_API)."""
-    env = _env()
-    key = env.get("OPENAI_API_KEY") or env.get("OPEN_AI_API")
+    """Return the OpenAI API key (env var OPENAI_API_KEY, or OPEN_AI_API)."""
+    key = get_env("OPENAI_API_KEY") or get_env("OPEN_AI_API")
     if not key:
         raise RuntimeError(
-            "OpenAI API key not found. Set OPEN_AI_API (or OPENAI_API_KEY) in .env."
+            "OpenAI API key not found. Set OPENAI_API_KEY (or OPEN_AI_API) as an "
+            "environment variable, or in .env for local development."
         )
     return key
 
 
 def get_llama_api_key() -> Optional[str]:
     """Return the LlamaParse key if present, else None (pdfplumber fallback)."""
-    return _env().get("LLAMA_CLOUD_API_KEY") or None
+    return get_env("LLAMA_CLOUD_API_KEY")

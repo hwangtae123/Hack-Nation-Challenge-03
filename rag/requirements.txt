@@ -10,3 +10,5 @@ python-dotenv>=1.0
 flask>=3.0
 pillow>=10.0
 pytest>=7.0
+cryptography>=42.0
+gunicorn>=22.0
