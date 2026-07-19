@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RealDoor - Rule Assistant (LIHTC / San Diego / FY2026)</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --ink:#e2e8f0; --muted:#94a3b8;
+          --accent:#38bdf8; --warn:#f59e0b; --ok:#34d399; --flag:#fb7185; --line:#334155; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background:var(--bg); color:var(--ink); line-height:1.5; }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 4px; font-size:20px; }
+  .scope { color:var(--muted); font-size:13px; }
+  .banner { margin:16px 24px 0; padding:12px 16px; border:1px solid var(--warn);
+            border-radius:8px; background:rgba(245,158,11,.08); color:#fde68a; font-size:13px; }
+  main { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+         gap:16px; padding:16px 24px 40px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card h2 { margin:0 0 4px; font-size:16px; }
+  .card p.hint { margin:0 0 12px; color:var(--muted); font-size:12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
+  input, textarea, select, button { font:inherit; }
+  input, textarea, select { width:100%; padding:8px 10px; border-radius:6px;
+    border:1px solid var(--line); background:#0b1220; color:var(--ink); }
+  textarea { resize:vertical; min-height:56px; }
+  button { margin-top:12px; padding:9px 14px; border:none; border-radius:6px;
+    background:var(--accent); color:#04222f; font-weight:600; cursor:pointer; }
+  button:hover { filter:brightness(1.08); }
+  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  .out { margin-top:14px; font-size:13px; }
+  .answer { white-space:pre-wrap; background:#0b1220; border:1px solid var(--line);
+            border-radius:6px; padding:10px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+           font-weight:600; margin-bottom:8px; }
+  .badge.ok { background:rgba(52,211,153,.15); color:var(--ok); border:1px solid var(--ok); }
+  .badge.review { background:rgba(251,113,133,.15); color:var(--flag); border:1px solid var(--flag); }
+  .badge.safe { background:rgba(245,158,11,.15); color:var(--warn); border:1px solid var(--warn); }
+  .cite { border-left:2px solid var(--accent); padding:4px 10px; margin:8px 0; }
+  .cite a { color:var(--accent); word-break:break-all; }
+  .flag { border-left:2px solid var(--flag); padding:4px 10px; margin:8px 0; }
+  .kv { color:var(--muted); } .kv b { color:var(--ink); }
+  .muted { color:var(--muted); font-size:12px; }
+  code { background:#0b1220; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RealDoor - Rule Assistant</h1>
+  <div class="scope">LIHTC (Section 42) &middot; San Diego-Chula Vista-Carlsbad, CA MSA &middot; FY2026 (effective 2026-05-01)</div>
+</header>
+<div class="banner">
+  This assistant does <b>not</b> decide eligibility, approval, denial, or priority.
+  It explains what the rules require, annualizes documented income, and compares it
+  with the frozen threshold so a <b>human reviewer</b> can decide.
+  {% if not index_ready %}<br><b>Note:</b> the rule index is not built yet - run <code>python -m rag.build_index</code> to enable the Understand tab.{% endif %}
+</div>
+
+<main>
+  <!-- Understand -->
+  <section class="card">
+    <h2>Understand &mdash; ask a rule question</h2>
+    <p class="hint">Answers only from cited corpus prose; abstains if no rule matches.</p>
+    <label>Question</label>
+    <textarea id="q">How do I verify an applicant's age?</textarea>
+    <button onclick="ask()">Ask</button>
+    <div class="out" id="understand-out"></div>
+  </section>
+
+  <!-- Income -->
+  <section class="card">
+    <h2>Income &mdash; neutral threshold comparison</h2>
+    <p class="hint">Deterministic lookup + annualization. No verdict.</p>
+    <div class="row">
+      <div><label>Household size</label><input id="i-size" type="number" value="4" min="1"></div>
+      <div><label>Threshold %</label><select id="i-pct"><option>60</option><option>50</option></select></div>
+    </div>
+    <label>Income source 1</label>
+    <div class="row">
+      <input id="i-amt1" type="number" value="2000">
+      <select id="i-freq1"><option>monthly</option><option>weekly</option><option>biweekly</option><option>semimonthly</option><option>annual</option></select>
+    </div>
+    <label>Income source 2 (optional, amount 0 to skip)</label>
+    <div class="row">
+      <input id="i-amt2" type="number" value="0">
+      <select id="i-freq2"><option>monthly</option><option>weekly</option><option>biweekly</option><option>semimonthly</option><option>annual</option></select>
+    </div>
+    <button onclick="income()">Compare</button>
+    <div class="out" id="income-out"></div>
+  </section>
+
+  <!-- Prepare -->
+  <section class="card">
+    <h2>Prepare &mdash; document readiness</h2>
+    <p class="hint">Flags missing / expired / conflicting evidence, each rule-cited.</p>
+    <div class="row">
+      <div><label>Household id</label><input id="p-id" value="HH-003"></div>
+      <div><label>Size</label><input id="p-size" type="number" value="3" min="1"></div>
+    </div>
+    <label>Required document types (comma-separated)</label>
+    <input id="p-req" value="application_summary, pay_stub, employment_letter">
+    <label>Present document types (comma-separated)</label>
+    <input id="p-present" value="application_summary, pay_stub">
+    <label>Known conflicts (comma-separated, optional)</label>
+    <input id="p-conf" value="">
+    <label>Income for the comparison</label>
+    <div class="row">
+      <input id="p-amt" type="number" value="1500">
+      <select id="p-freq"><option>biweekly</option><option>weekly</option><option>monthly</option><option>semimonthly</option><option>annual</option></select>
+    </div>
+    <button onclick="prepare()">Assess readiness</button>
+    <div class="out" id="prepare-out"></div>
+  </section>
+</main>
+
+<script>
+const COMPARISON_LABEL = {
+  below_or_equal: "At or below the frozen threshold",
+  above: "Above the frozen threshold",
+  no_frozen_threshold: "No frozen threshold for this household size"
+};
+async function post(url, body) {
+  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  return r.json();
+}
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function citeHtml(c){
+  const page = c.source_page ? ` (p.${esc(c.source_page)})` : "";
+  const eff = c.effective_date ? ` &middot; effective ${esc(c.effective_date)}` : "";
+  const url = c.source_url ? `<br><a href="${esc(c.source_url)}" target="_blank" rel="noopener">${esc(c.source_url)}</a>` : "";
+  const label = c.citation || c.rule_id || "";
+  return `<div class="cite">[${esc(c.n||"")}] <b>${esc(label)}</b>${page}${eff}${url}</div>`;
+}
+function comparisonHtml(cmp){
+  const label = COMPARISON_LABEL[cmp.comparison] || cmp.comparison;
+  const thr = cmp.threshold==null ? "n/a" : `$${Number(cmp.threshold).toLocaleString()}`;
+  return `<div class="kv">Annualized income: <b>$${Number(cmp.annualized_income).toLocaleString()}</b><br>`
+    + `Frozen ${esc(cmp.threshold_pct)}% threshold (size ${esc(cmp.household_size)}): <b>${thr}</b><br>`
+    + `Comparison: <b>${esc(label)}</b><br>`
+    + `<span class="muted">${esc(cmp.area)} &middot; effective ${esc(cmp.effective_date)}</span></div>`;
+}
+function incomeSources(amtIds){
+  const out = [];
+  for (const [a,f] of amtIds){
+    const amt = parseFloat(document.getElementById(a).value);
+    if (amt>0) out.push({amount:amt, frequency:document.getElementById(f).value});
+  }
+  return out;
+}
+async function ask(){
+  const el = document.getElementById("understand-out");
+  el.innerHTML = "<span class='muted'>Thinking...</span>";
+  const d = await post("/api/understand", {question:document.getElementById("q").value});
+  let html = "";
+  if (d.safety_intercept) html += `<span class="badge safe">safety: ${esc(d.safety_intercept)}</span><br>`;
+  else if (d.abstained) html += `<span class="badge safe">abstained</span><br>`;
+  html += `<div class="answer">${esc(d.answer)}</div>`;
+  if (d.citations && d.citations.length){
+    html += `<div class="muted" style="margin-top:8px">Citations</div>` + d.citations.map(citeHtml).join("");
+  }
+  el.innerHTML = html;
+}
+async function income(){
+  const el = document.getElementById("income-out");
+  el.innerHTML = "<span class='muted'>Computing...</span>";
+  const d = await post("/api/income", {
+    household_size: parseInt(document.getElementById("i-size").value),
+    threshold_pct: parseInt(document.getElementById("i-pct").value),
+    income_sources: incomeSources([["i-amt1","i-freq1"],["i-amt2","i-freq2"]])
+  });
+  el.innerHTML = d.error ? `<span class="badge review">${esc(d.error)}</span>` : comparisonHtml(d);
+}
+async function prepare(){
+  const el = document.getElementById("prepare-out");
+  el.innerHTML = "<span class='muted'>Assessing...</span>";
+  const split = s => s.split(",").map(x=>x.trim()).filter(Boolean);
+  const d = await post("/api/prepare", {
+    household_id: document.getElementById("p-id").value,
+    household_size: parseInt(document.getElementById("p-size").value),
+    required_document_types: split(document.getElementById("p-req").value),
+    present_document_types: split(document.getElementById("p-present").value),
+    known_conflicts: split(document.getElementById("p-conf").value),
+    income_sources: incomeSources([["p-amt","p-freq"]])
+  });
+  if (d.error){ el.innerHTML = `<span class="badge review">${esc(d.error)}</span>`; return; }
+  const cls = d.readiness_status==="READY_TO_REVIEW" ? "ok" : "review";
+  let html = `<span class="badge ${cls}">${esc(d.readiness_status)}</span>`;
+  if (d.flags.length){
+    html += d.flags.map(f=>`<div class="flag"><b>${esc(f.code)}</b><br>${esc(f.detail)}<br>`
+      + `<span class="muted">Rule ${esc(f.rule.rule_id)}: ${esc(f.rule.source_url)}</span></div>`).join("");
+  } else {
+    html += `<div class="muted" style="margin:8px 0">No blocking issues found.</div>`;
+  }
+  html += comparisonHtml(d.income_comparison);
+  html += `<div class="muted" style="margin-top:8px">${esc(d.decision_boundary)}</div>`;
+  html += `<div class="muted" style="margin-top:6px">Citations</div>` + d.citations.map(citeHtml).join("");
+  el.innerHTML = html;
+}
+</script>
+</body>
+</html>
