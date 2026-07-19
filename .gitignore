@@ -13,3 +13,6 @@ realdoor-hackathon-starter-pack/
 __pycache__/
 *.pyc
 
+
+# demo uploads
+rag/uploads/

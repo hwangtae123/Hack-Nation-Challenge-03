@@ -1,25 +1,64 @@
-"""Thin Flask demo for the RealDoor RAG (Stages 2-3).
+"""Unified RealDoor demo (Flask): Profile (extraction) + Understand + Prepare.
 
-Three read-only actions, all in English, none of which decides eligibility:
-  * /api/understand - a cited answer to a rule question (or a safe/abstain reply)
-  * /api/income     - a neutral annualized-income vs. frozen-threshold comparison
-  * /api/prepare    - deterministic document-readiness flags with rule citations
+This wires the Stage 1 extraction pipeline (``src/``) into the RAG demo so a user
+can pick or upload a synthetic income document, see the extracted fields with
+their source boxes and confidence, confirm them (nothing flows downstream until
+confirmed), and then run the neutral income comparison and readiness check.
 
-Run:  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python -m rag.app
-Then open http://127.0.0.1:5000
+Endpoints (all English output, no eligibility verdict anywhere):
+  GET  /                      the single-page UI
+  GET  /api/documents         list the bundled synthetic documents
+  POST /api/extract           run extraction on a bundled document
+  POST /api/upload            run extraction on an uploaded PDF
+  GET  /api/page.png          page 1 rendered with extracted/quarantined boxes
+  POST /api/understand        cited rule answer (or safe/abstain)
+  POST /api/income            neutral annualized-income vs. threshold comparison
+  POST /api/prepare           deterministic document-readiness flags
+
+Run:  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python -m rag.app   (from the repo root)
 """
 from __future__ import annotations
 
+import io
+from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request
+import pdfplumber
+from flask import Flask, abort, jsonify, render_template, request, send_file
+from PIL import ImageDraw
+from werkzeug.utils import secure_filename
 
 from rag.calculate import IncomeSource, summarize_income
 from rag.index import index_exists
 from rag.prepare import assess_readiness
 from rag.understand import answer_question
+from src import allowlist as doc_allowlist
+from src import config as doc_config
+from src.profile import build_profile
 
 app = Flask(__name__)
+
+UPLOADS_DIR = Path(__file__).resolve().parent / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
+
+# Box colors on the rendered page.
+_QUARANTINE_COLOR = (220, 40, 40)
+_FIELD_COLOR = (30, 160, 90)
+
+
+def _household_id(file_name: str) -> str:
+    """hh-001_d03_pay_stub.pdf -> HH-001."""
+    return file_name.split("_", 1)[0].upper()
+
+
+def _safe_doc_path(file_name: str, source: str) -> Path:
+    """Resolve a document path, refusing anything outside the allowed folders."""
+    name = secure_filename(file_name)
+    base = UPLOADS_DIR if source == "upload" else doc_config.DOCUMENTS_DIR
+    path = (base / name).resolve()
+    if not str(path).startswith(str(Path(base).resolve())) or not path.exists():
+        abort(404, description="Document not found.")
+    return path
 
 
 def _income_sources(raw: list[dict[str, Any]]) -> list[IncomeSource]:
@@ -36,6 +75,82 @@ def _income_sources(raw: list[dict[str, Any]]) -> list[IncomeSource]:
 @app.get("/")
 def home() -> str:
     return render_template("index.html", index_ready=index_exists())
+
+
+@app.get("/api/documents")
+def api_documents():
+    docs = []
+    for p in sorted(doc_config.DOCUMENTS_DIR.glob("*.pdf")):
+        docs.append(
+            {
+                "file_name": p.name,
+                "document_type": doc_allowlist.infer_document_type(p.name),
+                "household_id": _household_id(p.name),
+            }
+        )
+    return jsonify(documents=docs)
+
+
+def _extract_response(path: Path, document_type: str | None = None) -> dict[str, Any]:
+    profile = build_profile(path, document_type=document_type)
+    data = profile.to_dict()
+    data["household_id"] = _household_id(path.name)
+    return data
+
+
+@app.post("/api/extract")
+def api_extract():
+    file_name = (request.get_json(silent=True) or {}).get("file_name", "")
+    if not file_name:
+        return jsonify(error="file_name is required."), 400
+    path = _safe_doc_path(file_name, "dataset")
+    return jsonify(_extract_response(path))
+
+
+@app.post("/api/upload")
+def api_upload():
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(error="No file uploaded."), 400
+    if not file.filename.lower().endswith(".pdf"):
+        return jsonify(error="Only PDF documents are supported."), 400
+    name = secure_filename(file.filename)
+    dest = UPLOADS_DIR / name
+    file.save(str(dest))
+    # Arbitrary upload names can't be type-inferred; accept an optional override.
+    override = request.form.get("document_type") or None
+    if override and override not in doc_allowlist.ALLOWLIST:
+        return jsonify(error=f"Unknown document_type: {override}"), 400
+    data = _extract_response(dest, document_type=override)
+    data["source"] = "upload"
+    return jsonify(data)
+
+
+@app.get("/api/page.png")
+def api_page_png():
+    file_name = request.args.get("file", "")
+    source = request.args.get("source", "dataset")
+    path = _safe_doc_path(file_name, source)
+    profile = build_profile(path)
+    with pdfplumber.open(str(path)) as pdf:
+        page = pdf.pages[0]
+        height = page.height
+        rendered = page.to_image(resolution=110)
+        img = rendered.original.convert("RGB")
+        scale = img.width / page.width
+        draw = ImageDraw.Draw(img)
+        for f in profile.fields:
+            is_q = f.field == "untrusted_instruction_text"
+            color = _QUARANTINE_COLOR if is_q else _FIELD_COLOR
+            x0, y0, x1, y1 = f.bbox  # bottom-left origin
+            rect = [x0 * scale, (height - y1) * scale, x1 * scale, (height - y0) * scale]
+            draw.rectangle(rect, outline=color, width=2)
+            label = "INJECTION" if is_q else f.field
+            draw.text((rect[0], max(0, rect[1] - 11)), label, fill=color)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
 
 
 @app.post("/api/understand")
@@ -60,9 +175,8 @@ def api_understand():
 def api_income():
     data = request.get_json(silent=True) or {}
     try:
-        sources = _income_sources(data.get("income_sources", []))
         result = summarize_income(
-            sources,
+            _income_sources(data.get("income_sources", [])),
             household_size=int(data.get("household_size", 1)),
             threshold_pct=int(data.get("threshold_pct", 60)),
         )
