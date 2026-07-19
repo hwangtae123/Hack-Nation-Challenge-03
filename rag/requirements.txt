@@ -1,0 +1,11 @@
+# RealDoor RAG (Stages 2-3) dependencies.
+# Parsing uses pdfplumber (no API key); LlamaParse is optional and only used
+# if LLAMA_CLOUD_API_KEY is present.
+pdfplumber>=0.11
+openai>=1.40
+numpy>=1.26
+rank-bm25>=0.2.2
+tiktoken>=0.7
+python-dotenv>=1.0
+flask>=3.0
+pytest>=7.0

@@ -1,4 +1,9 @@
-rag/
+# RAG: track code + config, but not vendor source PDFs or generated artifacts
+rag/corpus/raw/*.pdf
+rag/corpus/cache/
+rag/index/
+rag/**/index.npz
+rag/**/index.json
 
 .env
 

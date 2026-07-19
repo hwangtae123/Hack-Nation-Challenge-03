@@ -1,0 +1,35 @@
+{
+  "program": "LIHTC",
+  "area": "San Diego-Chula Vista-Carlsbad, CA MSA (San Diego County)",
+  "rule_year": "FY2026",
+  "effective_date": "2026-05-01",
+  "source": "HUD FY2026 MTSP Income Limits (2026 MTSP Regular, CA HCD published)",
+  "source_url": "https://www.huduser.gov/portal/datasets/mtsp.html",
+  "note": "Numbers are LOOKUP values, not computed. Do NOT derive 60% as 1.2x50% in general code - HUD applies rounding/exceptions; store both official rows. Verified against CA HCD 2026 MTSP Regular Limits table (SAN DIEGO), effective 2026-05-01.",
+  "core_challenge_threshold_pct": 60,
+  "median_family_income": null,
+  "source_pdf_page": null,
+  "_todo": "median_family_income and source_pdf_page are not yet filled from the official HERA FY26 report. Neither is used by the deterministic threshold comparison; leave null until verified.",
+  "limits": {
+    "50": {
+      "1": 61250,
+      "2": 70000,
+      "3": 78750,
+      "4": 87450,
+      "5": 94450,
+      "6": 101450,
+      "7": 108450,
+      "8": 115450
+    },
+    "60": {
+      "1": 73500,
+      "2": 84000,
+      "3": 94500,
+      "4": 104940,
+      "5": 113340,
+      "6": 121740,
+      "7": 130140,
+      "8": 138540
+    }
+  }
+}
