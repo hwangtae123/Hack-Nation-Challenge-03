@@ -15,12 +15,10 @@
   .scope { color:var(--muted); font-size:13px; }
   .banner { margin:16px 24px 0; padding:12px 16px; border:1px solid var(--warn);
             border-radius:8px; background:rgba(245,158,11,.08); color:#fde68a; font-size:13px; }
-  main { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
-         gap:16px; padding:16px 24px 40px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
-  .card.wide { grid-column: 1 / -1; }
-  .card h2 { margin:0 0 4px; font-size:16px; }
-  .card p.hint { margin:0 0 12px; color:var(--muted); font-size:12px; }
+  main { max-width:960px; margin:0 auto; padding:16px 24px 48px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; }
+  .card h2 { margin:0 0 4px; font-size:17px; }
+  .card p.hint { margin:0 0 14px; color:var(--muted); font-size:12px; }
   label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
   input, textarea, select, button { font:inherit; }
   input, textarea, select { width:100%; padding:8px 10px; border-radius:6px;
@@ -30,7 +28,9 @@
     background:var(--accent); color:#04222f; font-weight:600; cursor:pointer; }
   button:hover { filter:brightness(1.08); }
   button:disabled { background:var(--line); color:var(--muted); cursor:not-allowed; filter:none; }
-  .row { display:flex; gap:8px; align-items:flex-start; } .row > * { flex:1; }
+  button.btn-ghost { background:transparent; border:1px solid var(--line); color:var(--muted); font-weight:600; }
+  button.btn-ghost:hover { color:var(--ink); border-color:var(--muted); filter:none; }
+  .row { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; } .row > * { flex:1; min-width:160px; }
   .row > button { flex:0 0 auto; }
   .out { margin-top:14px; font-size:13px; }
   .answer { white-space:pre-wrap; background:#0b1220; border:1px solid var(--line);
@@ -47,7 +47,30 @@
   .muted { color:var(--muted); font-size:12px; }
   code { background:#0b1220; padding:1px 5px; border-radius:4px; }
 
-  /* Profile card additions */
+  /* Wizard chrome */
+  .steps-bar { display:flex; gap:8px; margin:16px 0 6px; }
+  .step-pill { flex:1; text-align:center; padding:8px 6px; border-radius:6px; background:var(--card);
+               border:1px solid var(--line); color:var(--muted); font-size:11px; font-weight:600; }
+  .step-pill.active { border-color:var(--accent); color:var(--accent); background:rgba(56,189,248,.08); }
+  .step-pill.done { border-color:var(--ok); color:var(--ok); }
+  .step-sub { margin:0 0 16px; color:var(--muted); font-size:12px; }
+  .wizard-nav { display:flex; justify-content:space-between; margin-top:20px; gap:10px; }
+  .msg { margin:0 0 14px; padding:10px 14px; border-radius:8px; font-size:13px; }
+  .msg.err { background:rgba(251,113,133,.1); border:1px solid var(--flag); color:var(--flag); }
+
+  /* Step 1: document picker */
+  .doc-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px; margin-top:8px; }
+  .hh-group { border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .hh-group h4 { margin:0 0 6px; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .doc-check-row { display:flex; align-items:center; gap:8px; font-size:13px; padding:3px 0; }
+  .doc-check-row input[type=checkbox] { width:auto; }
+  .chip { display:inline-flex; align-items:center; gap:6px; background:#0b1220; border:1px solid var(--line);
+          border-radius:999px; padding:4px 6px 4px 12px; font-size:12px; margin:4px 6px 0 0; }
+  .chip button { margin:0; padding:0 6px; background:transparent; color:var(--flag); border:none;
+                 font-weight:700; cursor:pointer; border-radius:999px; }
+  .chip button:hover { filter:none; color:#fff; background:var(--flag); }
+
+  /* Document review */
   .doc-img { max-width:100%; height:auto; border:1px solid var(--line); border-radius:6px;
              margin:10px 0; display:block; background:#0b1220; }
   .ftable { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
@@ -66,7 +89,6 @@
   .gate { margin-top:14px; padding:8px 12px; border-radius:6px; font-size:13px; font-weight:700; }
   .gate.locked { background:rgba(245,158,11,.12); color:var(--warn); border:1px solid var(--warn); }
   .gate.ready { background:rgba(52,211,153,.12); color:var(--ok); border:1px solid var(--ok); }
-  .downstream { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
   .field-hint { margin:2px 0 10px; }
 </style>
 </head>
@@ -80,100 +102,11 @@
   It extracts and lets you confirm document data, explains what the rules require,
   annualizes documented income, and compares it with the frozen threshold so a
   <b>human reviewer</b> can decide.
-  {% if not index_ready %}<br><b>Note:</b> the rule index is not built yet - run <code>python -m rag.build_index</code> to enable the Understand tab.{% endif %}
+  {% if not index_ready %}<br><b>Note:</b> the rule index is not built yet - run <code>python -m rag.build_index</code> to enable the Understand step.{% endif %}
 </div>
 
 <main>
-  <!-- 1) Profile -->
-  <section class="card wide">
-    <h2>1) Profile &mdash; document extraction</h2>
-    <p class="hint">Pick a bundled synthetic document or upload your own PDF. Extracted fields are locked
-      until you review and confirm each one &mdash; nothing here reaches Income or Prepare unconfirmed.</p>
-
-    <div class="row">
-      <div>
-        <label>Bundled document</label>
-        <select id="doc-select"><option value="">Loading documents...</option></select>
-      </div>
-      <button onclick="extractSelected()">Extract</button>
-    </div>
-
-    <div class="row" style="margin-top:10px">
-      <div>
-        <label>Upload a PDF</label>
-        <input id="doc-file" type="file" accept=".pdf">
-      </div>
-      <div>
-        <label>Document type (optional)</label>
-        <select id="doc-type-override">
-          <option value="">(infer automatically)</option>
-          <option value="application_summary">application_summary</option>
-          <option value="pay_stub">pay_stub</option>
-          <option value="employment_letter">employment_letter</option>
-          <option value="benefit_letter">benefit_letter</option>
-          <option value="gig_statement">gig_statement</option>
-        </select>
-      </div>
-      <button onclick="uploadSelected()">Upload &amp; extract</button>
-    </div>
-
-    <div class="out" id="profile-out"></div>
-  </section>
-
-  <!-- 2) Understand -->
-  <section class="card">
-    <h2>2) Understand &mdash; ask a rule question</h2>
-    <p class="hint">Answers only from cited corpus prose; abstains if no rule matches.</p>
-    <label>Question</label>
-    <textarea id="q">How do I verify an applicant's age?</textarea>
-    <button onclick="ask()">Ask</button>
-    <div class="out" id="understand-out"></div>
-  </section>
-
-  <!-- 3) Income -->
-  <section class="card">
-    <h2>3) Income &mdash; neutral threshold comparison</h2>
-    <p class="hint">Deterministic lookup + annualization. No verdict.</p>
-    <div class="row">
-      <div><label>Household size</label><input id="i-size" type="number" value="4" min="1"></div>
-      <div><label>Threshold %</label><select id="i-pct"><option>60</option><option>50</option></select></div>
-    </div>
-    <label>Income source 1</label>
-    <div class="row">
-      <input id="i-amt1" type="number" value="2000">
-      <select id="i-freq1"><option>monthly</option><option>weekly</option><option>biweekly</option><option>semimonthly</option><option>annual</option></select>
-    </div>
-    <label>Income source 2 (optional, amount 0 to skip)</label>
-    <div class="row">
-      <input id="i-amt2" type="number" value="0">
-      <select id="i-freq2"><option>monthly</option><option>weekly</option><option>biweekly</option><option>semimonthly</option><option>annual</option></select>
-    </div>
-    <button onclick="income()">Compare</button>
-    <div class="out" id="income-out"></div>
-  </section>
-
-  <!-- 4) Prepare -->
-  <section class="card">
-    <h2>4) Prepare &mdash; document readiness</h2>
-    <p class="hint">Flags missing / expired / conflicting evidence, each rule-cited.</p>
-    <div class="row">
-      <div><label>Household id</label><input id="p-id" value="HH-003"></div>
-      <div><label>Size</label><input id="p-size" type="number" value="3" min="1"></div>
-    </div>
-    <label>Required document types (comma-separated)</label>
-    <input id="p-req" value="application_summary, pay_stub, employment_letter">
-    <label>Present document types (comma-separated)</label>
-    <input id="p-present" value="application_summary, pay_stub">
-    <label>Known conflicts (comma-separated, optional)</label>
-    <input id="p-conf" value="">
-    <label>Income for the comparison</label>
-    <div class="row">
-      <input id="p-amt" type="number" value="1500">
-      <select id="p-freq"><option>biweekly</option><option>weekly</option><option>monthly</option><option>semimonthly</option><option>annual</option></select>
-    </div>
-    <button onclick="prepare()">Assess readiness</button>
-    <div class="out" id="prepare-out"></div>
-  </section>
+  <div id="wizard-root"></div>
 </main>
 
 <script>
@@ -187,6 +120,8 @@ async function post(url, body) {
   return r.json();
 }
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function jsStr(s){ return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
+function attrJs(s){ return esc(jsStr(s)); }
 function citeHtml(c){
   const page = c.source_page ? ` (p.${esc(c.source_page)})` : "";
   const eff = c.effective_date ? ` &middot; effective ${esc(c.effective_date)}` : "";
@@ -202,78 +137,262 @@ function comparisonHtml(cmp){
     + `Comparison: <b>${esc(label)}</b><br>`
     + `<span class="muted">${esc(cmp.area)} &middot; effective ${esc(cmp.effective_date)}</span></div>`;
 }
-function incomeSources(amtIds){
-  const out = [];
-  for (const [a,f] of amtIds){
-    const amt = parseFloat(document.getElementById(a).value);
-    if (amt>0) out.push({amount:amt, frequency:document.getElementById(f).value});
-  }
-  return out;
-}
 
-/* ---------------- 1) Profile ---------------- */
-let currentProfile = null; // { data, source }
+/* ============================================================
+   Wizard state — everything lives in one object; render() draws
+   only the current step from it.
+   step: 0 = add documents
+         1..docs.length = review document[step-1]
+         docs.length+1  = household summary
+         docs.length+2  = understand (final step)
+   ============================================================ */
+const state = {
+  step: 0,
+  docs: [],             // merged extraction results (dataset + upload), each with .source
+  allDocuments: [],      // full bundled catalog from /api/documents, for the picker
+  selectedBundled: new Set(),
+  uploadFiles: [],       // File objects queued for upload, not yet sent
+  errors: [],            // {file, error} from /api/upload or a failed batch call
+  stepMessage: "",       // transient validation message on step 1
+  question: "How is annual income calculated?",
+};
 
-async function loadDocuments(){
-  const sel = document.getElementById("doc-select");
+window.addEventListener("DOMContentLoaded", async () => {
   try {
     const r = await fetch("/api/documents");
     const d = await r.json();
-    const docs = d.documents || [];
-    sel.innerHTML = docs.map(doc =>
-      `<option value="${esc(doc.file_name)}">${esc(doc.file_name)} &mdash; ${esc(doc.document_type || "unknown type")}</option>`
-    ).join("") || `<option value="">(no documents found)</option>`;
+    state.allDocuments = d.documents || [];
   } catch (e) {
-    sel.innerHTML = `<option value="">(failed to load documents)</option>`;
+    state.allDocuments = [];
+  }
+  render();
+});
+
+/* ---------------- master render ---------------- */
+function render(){
+  const root = document.getElementById("wizard-root");
+  let html = stepIndicatorHtml();
+  if (state.errors.length){
+    html += `<div class="msg err">Some documents could not be processed: `
+      + state.errors.map(e => `${esc(e.file)}: ${esc(e.error)}`).join("; ")
+      + ` <button type="button" class="btn-ghost" style="margin:0 0 0 8px;padding:2px 8px" onclick="dismissErrors()">dismiss</button></div>`;
+  }
+  const N = state.docs.length;
+  if (state.step === 0){
+    html += buildStep1Html();
+  } else if (state.step >= 1 && state.step <= N){
+    html += buildDocReviewHtml(state.step - 1);
+  } else if (state.step === N + 1){
+    html += buildSummaryHtml();
+  } else {
+    html += buildUnderstandHtml();
+  }
+  root.innerHTML = html;
+  if (state.step === N + 1 && N > 0){
+    runSummary(); // auto-compute so the aggregation is visible on arrival; button re-runs after edits
   }
 }
+function dismissErrors(){ state.errors = []; render(); }
 
-function sizeFromHouseholdId(id){
-  const m = id ? String(id).match(/(\d)(?!.*\d)/) : null;
-  const n = m ? parseInt(m[1], 10) : NaN;
-  return (n >= 1) ? n : 1;
+function stepIndicatorHtml(){
+  const N = state.docs.length;
+  const phases = ["Add documents", "Review documents", "Household summary", "Understand rules"];
+  let phaseIdx, sub = "";
+  if (state.step === 0){ phaseIdx = 0; }
+  else if (state.step <= N){ phaseIdx = 1; sub = `Document ${state.step} of ${N}`; }
+  else if (state.step === N + 1){ phaseIdx = 2; }
+  else { phaseIdx = 3; }
+  const total = N + 3;
+  let html = `<div class="steps-bar">` + phases.map((p, i) => {
+    const cls = i === phaseIdx ? "active" : (i < phaseIdx ? "done" : "");
+    return `<div class="step-pill ${cls}">${i + 1}. ${esc(p)}</div>`;
+  }).join("") + `</div>`;
+  html += `<div class="step-sub">Step ${state.step + 1} of ${total}${sub ? " — " + esc(sub) : ""}</div>`;
+  return html;
 }
 
-function getFieldValue(fieldName){
-  const inp = document.querySelector(`#profile-out .field-value-input[data-field="${fieldName}"]`);
-  return inp ? inp.value : null;
+/* ---------------- navigation ---------------- */
+function goBack(){
+  persistCurrentDoc();
+  if (state.step > 0) state.step -= 1;
+  render();
+}
+function goNext(){
+  persistCurrentDoc();
+  const maxStep = state.docs.length + 2;
+  if (state.step < maxStep) state.step += 1;
+  render();
 }
 
-function downstreamActionsHtml(data){
-  const dt = data.document_type;
-  if (dt === "pay_stub" || dt === "gig_statement" || dt === "benefit_letter"){
-    const defSize = sizeFromHouseholdId(data.household_id);
-    const label = dt === "benefit_letter" ? "Use confirmed benefit &rarr; compare" : "Use confirmed income &rarr; compare";
-    return `<div class="downstream">
-      <div class="row">
-        <div><label>Household size for the comparison</label><input id="profile-hh-size" type="number" min="1" value="${defSize}"></div>
-        <button id="use-income-btn" onclick="useConfirmedIncome()" disabled>${label}</button>
-      </div>
-      <div class="out" id="profile-income-out"></div>
-    </div>`;
+/* ---------------- Step 1: add documents ---------------- */
+function groupByHousehold(docs){
+  const map = new Map();
+  docs.forEach(d => {
+    const hh = d.household_id || "UNKNOWN";
+    if (!map.has(hh)) map.set(hh, []);
+    map.get(hh).push(d);
+  });
+  return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+}
+function uniqueHouseholds(){
+  const set = new Set(state.allDocuments.map(d => d.household_id).filter(Boolean));
+  if (set.size === 0) ["HH-001","HH-002","HH-003","HH-004","HH-005","HH-006"].forEach(h => set.add(h));
+  return Array.from(set).sort();
+}
+function toggleBundled(fileName, checked){
+  if (checked) state.selectedBundled.add(fileName); else state.selectedBundled.delete(fileName);
+  render();
+}
+function loadHousehold(){
+  const hh = document.getElementById("hh-select").value;
+  state.allDocuments.filter(d => d.household_id === hh).forEach(d => state.selectedBundled.add(d.file_name));
+  render();
+}
+function removeBundledChip(fileName){
+  state.selectedBundled.delete(fileName);
+  render();
+}
+function onUploadFilesChosen(input){
+  Array.from(input.files || []).forEach(f => {
+    if (!state.uploadFiles.some(x => x.name === f.name && x.size === f.size)) state.uploadFiles.push(f);
+  });
+  input.value = ""; // reset so the same or additional files can be picked again
+  render();
+}
+function removeUploadChip(idx){
+  state.uploadFiles.splice(idx, 1);
+  render();
+}
+
+function buildStep1Html(){
+  let html = `<div class="card">`;
+  html += `<h2>Step 1 — Add documents</h2>`;
+  html += `<p class="hint">Load bundled synthetic documents (by household, or pick individually) and/or upload your own PDFs — combine both. `
+        + `Nothing is extracted until you click &ldquo;Extract &amp; continue&rdquo;.</p>`;
+
+  if (state.stepMessage) html += `<div class="msg err">${esc(state.stepMessage)}</div>`;
+  if (state.loading) html += `<div class="msg" style="border:1px solid var(--line);color:var(--muted)">Extracting selected documents...</div>`;
+
+  html += `<div class="row">
+    <div><label>Household</label>
+      <select id="hh-select">${uniqueHouseholds().map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join("")}</select>
+    </div>
+    <button type="button" onclick="loadHousehold()">Load all documents for this household</button>
+  </div>`;
+
+  html += `<label style="margin-top:16px">All bundled documents (${state.allDocuments.length})</label>`;
+  if (!state.allDocuments.length){
+    html += `<div class="muted">Could not load the bundled document catalog (/api/documents). You can still upload your own PDFs below.</div>`;
+  } else {
+    html += `<div class="doc-grid">`;
+    groupByHousehold(state.allDocuments).forEach(([hh, docs]) => {
+      html += `<div class="hh-group"><h4>${esc(hh)}</h4>`;
+      docs.forEach(d => {
+        const checked = state.selectedBundled.has(d.file_name) ? "checked" : "";
+        html += `<label class="doc-check-row"><input type="checkbox" ${checked} `
+              + `onchange="toggleBundled('${attrJs(d.file_name)}', this.checked)"> ${esc(d.file_name)} `
+              + `<span class="muted">&mdash; ${esc(d.document_type || "unknown type")}</span></label>`;
+      });
+      html += `</div>`;
+    });
+    html += `</div>`;
   }
-  if (dt === "application_summary"){
-    return `<div class="downstream">
-      <button id="use-profile-btn" onclick="useConfirmedProfile()" disabled>Use confirmed profile &rarr; prefill Prepare</button>
-      <div class="out" id="profile-prefill-out"></div>
-    </div>`;
+
+  html += `<label style="margin-top:16px">Upload PDFs (one or many)</label>
+    <input id="upload-input" type="file" multiple accept=".pdf" onchange="onUploadFilesChosen(this)">`;
+
+  const totalSelected = state.selectedBundled.size + state.uploadFiles.length;
+  html += `<label style="margin-top:16px">Selected documents (${totalSelected})</label><div>`;
+  if (totalSelected === 0){
+    html += `<span class="muted">Nothing selected yet.</span>`;
   }
-  return "";
+  Array.from(state.selectedBundled).sort().forEach(fn => {
+    html += `<span class="chip">${esc(fn)}<button type="button" onclick="removeBundledChip('${attrJs(fn)}')" aria-label="Remove">&times;</button></span>`;
+  });
+  state.uploadFiles.forEach((f, i) => {
+    html += `<span class="chip">${esc(f.name)} <span class="muted">(upload)</span>`
+          + `<button type="button" onclick="removeUploadChip(${i})" aria-label="Remove">&times;</button></span>`;
+  });
+  html += `</div>`;
+
+  html += `<div class="wizard-nav"><span></span><button type="button" onclick="extractAndContinue()">Extract &amp; continue</button></div>`;
+  html += `</div>`;
+  return html;
 }
 
-function renderProfile(data){
-  const source = data.source === "upload" ? "upload" : "dataset";
-  currentProfile = { data, source };
-  const el = document.getElementById("profile-out");
-  const isOcr = data.status === "NEEDS_OCR";
-  const badgeClass = isOcr ? "safe" : (data.status === "NEEDS_CONFIRMATION" ? "ok" : "review");
+async function extractAndContinue(){
+  const bundledNames = Array.from(state.selectedBundled);
+  const uploads = state.uploadFiles;
+  if (bundledNames.length === 0 && uploads.length === 0){
+    state.stepMessage = "Select at least one bundled document or upload a PDF before continuing.";
+    render();
+    return;
+  }
+  state.stepMessage = "";
+  state.loading = true;
+  render();
 
-  let html = `<span class="badge ${badgeClass}">${esc(data.status)}</span> `;
-  html += `<span class="muted">${esc(data.file_name)} &middot; ${esc(data.document_type || "unknown type")}`
-        + `${data.household_id ? " &middot; " + esc(data.household_id) : ""}`
-        + `${source === "upload" ? " &middot; uploaded" : ""}</span>`;
+  let merged = [];
+  let errors = [];
+  try {
+    if (bundledNames.length){
+      const d = await post("/api/extract_batch", { file_names: bundledNames });
+      if (d.error) errors.push({ file: "bundled selection", error: d.error });
+      else merged = merged.concat((d.documents || []).map(doc => ({ ...doc, source: "dataset" })));
+    }
+    if (uploads.length){
+      const fd = new FormData();
+      uploads.forEach(f => fd.append("files", f));
+      const r = await fetch("/api/upload", { method: "POST", body: fd });
+      const d = await r.json();
+      if (d.error) errors.push({ file: "upload", error: d.error });
+      else {
+        merged = merged.concat((d.documents || []).map(doc => ({ ...doc, source: doc.source || "upload" })));
+        errors = errors.concat(d.errors || []);
+      }
+    }
+  } catch (e) {
+    errors.push({ file: "request", error: String(e) });
+  }
 
-  html += `<img class="doc-img" src="/api/page.png?file=${encodeURIComponent(data.file_name)}&source=${source}" `
+  state.loading = false;
+  state.docs = merged;
+  state.errors = errors;
+
+  if (merged.length === 0){
+    state.stepMessage = "No documents were extracted." + (errors.length ? " " + errors.map(e => `${e.file}: ${e.error}`).join("; ") : "");
+    render();
+    return;
+  }
+  state.step = 1;
+  render();
+}
+
+/* ---------------- Steps 2..(N+1): review one document at a time ---------------- */
+function isDocConfirmed(doc){
+  if (doc.status === "NEEDS_OCR") return true;
+  const normal = (doc.fields || []).filter(f => f.field !== "untrusted_instruction_text");
+  return normal.every(f => f.confirmed);
+}
+function fieldVal(doc, name){
+  const f = (doc.fields || []).find(x => x.field === name);
+  return f ? f.value : null;
+}
+
+function buildDocReviewHtml(idx){
+  const N = state.docs.length;
+  const doc = state.docs[idx];
+  const k = idx + 1;
+  const isOcr = doc.status === "NEEDS_OCR";
+  const badgeClass = isOcr ? "safe" : (doc.status === "NEEDS_CONFIRMATION" ? "ok" : "review");
+  const source = doc.source === "upload" ? "upload" : "dataset";
+
+  let html = `<div class="card">`;
+  html += `<h2>Document ${k} of ${N} &mdash; ${esc(doc.file_name)} (${esc(doc.document_type || "unknown type")})</h2>`;
+  html += `<span class="badge ${badgeClass}">${esc(doc.status)}</span> `;
+  html += `<span class="muted">${doc.household_id ? esc(doc.household_id) + " &middot; " : ""}${source === "upload" ? "uploaded" : "bundled dataset"}</span>`;
+
+  html += `<img class="doc-img" src="/api/page.png?file=${encodeURIComponent(doc.file_name)}&source=${source}" `
         + `alt="Page 1 with extracted field boxes">`;
 
   if (isOcr){
@@ -281,145 +400,234 @@ function renderProfile(data){
           + `so no fields were extracted.</div>`;
   }
 
-  const allFields = data.fields || [];
+  const allFields = doc.fields || [];
   const normalFields = allFields.filter(f => f.field !== "untrusted_instruction_text");
   const untrustedFields = allFields.filter(f => f.field === "untrusted_instruction_text");
 
-  if (normalFields.length){
-    html += `<table class="ftable"><thead><tr><th>Field</th><th>Value</th><th>Confidence</th><th>Page</th><th>Confirm</th></tr></thead><tbody>`;
-    normalFields.forEach(f => {
-      const pct = Math.round((f.confidence == null ? 0 : f.confidence) * 100);
-      html += `<tr>
-        <td>${esc(f.field)}</td>
-        <td><input type="text" class="field-value-input" data-field="${esc(f.field)}" value="${esc(f.value)}"></td>
-        <td><span class="conf-track"><span class="conf-fill" style="width:${pct}%"></span></span>${pct}%</td>
-        <td>${esc(f.page)}</td>
-        <td><input type="checkbox" class="field-confirm-cb" onchange="updateGateStatus()"></td>
-      </tr>`;
-    });
-    html += `</tbody></table>`;
-  } else if (!isOcr) {
-    html += `<div class="muted field-hint">No allowlisted fields were extracted for this document type.</div>`;
+  if (!isOcr){
+    if (normalFields.length){
+      html += `<table class="ftable" id="doc-review"><thead><tr><th>Field</th><th>Value</th><th>Confidence</th><th>Page</th><th>Confirm</th></tr></thead><tbody>`;
+      normalFields.forEach(f => {
+        const conf = f.confidence == null ? 0 : f.confidence;
+        const pct = Math.round(conf * 100);
+        html += `<tr class="field-row" data-field="${esc(f.field)}">
+          <td>${esc(f.field)}</td>
+          <td><input type="text" class="field-value-input" value="${esc(f.value)}"></td>
+          <td><span class="conf-track"><span class="conf-fill" style="width:${pct}%"></span></span>${conf.toFixed(2)}</td>
+          <td>${esc(f.page)}</td>
+          <td><input type="checkbox" class="field-confirm-cb" ${f.confirmed ? "checked" : ""} onchange="updateDocGate()"></td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+    } else {
+      html += `<div class="muted field-hint">No allowlisted fields were extracted for this document type.</div>`;
+    }
   }
 
-  // Quarantine panel: quarantine[] entries plus any untrusted_instruction_text field, deduped by text.
-  const qItems = (data.quarantine || []).map(q => ({ text:q.text, page:q.page, matched_pattern:q.matched_pattern }));
+  // Quarantine: doc.quarantine[] plus any untrusted_instruction_text field, deduped by text.
+  const qItems = (doc.quarantine || []).map(q => ({ text: q.text, page: q.page, matched_pattern: q.matched_pattern }));
   const seen = new Set(qItems.map(q => q.text));
   untrustedFields.forEach(f => {
-    if (!seen.has(f.value)){ qItems.push({ text:f.value, page:f.page, matched_pattern:null }); seen.add(f.value); }
+    if (!seen.has(f.value)){ qItems.push({ text: f.value, page: f.page, matched_pattern: null }); seen.add(f.value); }
   });
   if (qItems.length){
-    html += `<div class="quarantine"><div class="q-title">Untrusted document text &mdash; quarantined, NOT executed</div>`;
+    html += `<div class="quarantine"><div class="q-title">Untrusted document text &mdash; quarantined, NOT executed (inert data, never releasable downstream)</div>`;
     qItems.forEach(q => {
       html += `<div class="q-item">&ldquo;${esc(q.text)}&rdquo;<br>`
-            + `<span class="muted">page ${esc(q.page)}${q.matched_pattern ? " &middot; detector: " + esc(q.matched_pattern) : ""} `
-            + `&middot; treated as inert data only &mdash; never as an instruction, never releasable downstream</span></div>`;
+            + `<span class="muted">page ${esc(q.page)}${q.matched_pattern ? " &middot; detector: " + esc(q.matched_pattern) : ""}</span></div>`;
     });
     html += `</div>`;
   }
 
-  if (normalFields.length){
-    html += `<div class="gate locked" id="gate-status">LOCKED &mdash; confirm all fields to unlock Income / Prepare</div>`;
-    html += `<button onclick="confirmAllFields()">Confirm all</button>`;
+  if (!isOcr && normalFields.length){
+    const done = normalFields.filter(f => f.confirmed).length;
+    const unlocked = done === normalFields.length;
+    html += `<div class="gate ${unlocked ? "ready" : "locked"}" id="doc-gate">`
+          + `${unlocked ? "CONFIRMED" : `LOCKED &mdash; ${done}/${normalFields.length} confirmed`}</div>`;
+    html += `<button type="button" onclick="confirmAllInDoc()">Confirm all fields</button>`;
+  } else if (isOcr){
+    html += `<div class="gate ready">CONFIRMED &mdash; nothing to confirm (image-only document)</div>`;
   }
 
-  html += downstreamActionsHtml(data);
-
-  el.innerHTML = html;
-  if (normalFields.length) updateGateStatus();
+  html += `<div class="wizard-nav">
+    <button type="button" class="btn-ghost" onclick="goBack()">&larr; Back</button>
+    <button type="button" onclick="goNext()">${k === N ? "Next: Household summary" : "Next"} &rarr;</button>
+  </div>`;
+  html += `</div>`;
+  return html;
 }
 
-function updateGateStatus(){
-  const boxes = Array.from(document.querySelectorAll("#profile-out .field-confirm-cb"));
+function updateDocGate(){
+  const gateEl = document.getElementById("doc-gate");
+  if (!gateEl) return;
+  const boxes = Array.from(document.querySelectorAll("#doc-review .field-confirm-cb"));
   const total = boxes.length;
   const done = boxes.filter(b => b.checked).length;
   const unlocked = total > 0 && done === total;
-  const gateEl = document.getElementById("gate-status");
-  if (gateEl){
-    gateEl.className = "gate " + (unlocked ? "ready" : "locked");
-    gateEl.textContent = unlocked ? "READY — values confirmed" : `LOCKED — ${done}/${total} fields confirmed`;
+  gateEl.className = "gate " + (unlocked ? "ready" : "locked");
+  gateEl.textContent = unlocked ? "CONFIRMED" : `LOCKED — ${done}/${total} confirmed`;
+}
+function confirmAllInDoc(){
+  document.querySelectorAll("#doc-review .field-confirm-cb").forEach(b => b.checked = true);
+  updateDocGate();
+}
+
+function persistCurrentDoc(){
+  const N = state.docs.length;
+  if (state.step < 1 || state.step > N) return;
+  const doc = state.docs[state.step - 1];
+  if (doc.status === "NEEDS_OCR") return;
+  document.querySelectorAll("#doc-review .field-row").forEach(row => {
+    const fieldName = row.getAttribute("data-field");
+    const f = (doc.fields || []).find(x => x.field === fieldName);
+    if (!f) return;
+    const valInput = row.querySelector(".field-value-input");
+    const cb = row.querySelector(".field-confirm-cb");
+    if (valInput) f.value = valInput.value;
+    if (cb) f.confirmed = cb.checked;
+  });
+}
+
+/* ---------------- Step N+2: household summary ---------------- */
+function loadedDocTypes(){
+  return Array.from(new Set(state.docs.map(d => d.document_type).filter(Boolean)));
+}
+function defaultHouseholdId(){
+  const ids = state.docs.map(d => d.household_id).filter(Boolean);
+  return ids.length ? ids[0] : "";
+}
+function defaultHouseholdSize(){
+  const appDoc = state.docs.find(d => d.document_type === "application_summary" && isDocConfirmed(d));
+  if (appDoc){
+    const n = parseInt(fieldVal(appDoc, "household_size"), 10);
+    if (!isNaN(n) && n > 0) return n;
   }
-  const incomeBtn = document.getElementById("use-income-btn");
-  if (incomeBtn) incomeBtn.disabled = !unlocked;
-  const profileBtn = document.getElementById("use-profile-btn");
-  if (profileBtn) profileBtn.disabled = !unlocked;
+  return 1;
+}
+function buildIncomeSourcesFromConfirmed(){
+  const sources = [];
+  state.docs.filter(isDocConfirmed).forEach(doc => {
+    if (doc.document_type === "pay_stub"){
+      const amt = parseFloat(fieldVal(doc, "gross_pay"));
+      const freq = fieldVal(doc, "pay_frequency");
+      if (!isNaN(amt) && freq) sources.push({ amount: amt, frequency: freq });
+    } else if (doc.document_type === "benefit_letter"){
+      const amt = parseFloat(fieldVal(doc, "monthly_benefit"));
+      const freq = fieldVal(doc, "benefit_frequency") || "monthly";
+      if (!isNaN(amt)) sources.push({ amount: amt, frequency: freq });
+    } else if (doc.document_type === "gig_statement"){
+      const amt = parseFloat(fieldVal(doc, "gross_receipts"));
+      if (!isNaN(amt)) sources.push({ amount: amt, frequency: "monthly" });
+    }
+  });
+  return sources;
 }
 
-function confirmAllFields(){
-  document.querySelectorAll("#profile-out .field-confirm-cb").forEach(b => b.checked = true);
-  updateGateStatus();
+function buildSummaryHtml(){
+  const confirmedDocs = state.docs.filter(isDocConfirmed);
+  const unconfirmedDocs = state.docs.filter(d => !isDocConfirmed(d));
+
+  let html = `<div class="card">`;
+  html += `<h2>Household summary &mdash; income &amp; readiness</h2>`;
+  html += `<p class="hint">Aggregates only the CONFIRMED, possibly-edited values from the documents you reviewed. `
+        + `This is a neutral comparison and a readiness checklist &mdash; never an eligibility verdict.</p>`;
+
+  html += `<div class="muted" style="margin-bottom:10px">${confirmedDocs.length} of ${state.docs.length} document(s) confirmed.`;
+  if (unconfirmedDocs.length){
+    html += ` Not yet confirmed (excluded below): ` + unconfirmedDocs.map(d => esc(d.file_name)).join(", ") + ".";
+  }
+  html += `</div>`;
+
+  html += `<div class="row">
+    <div><label>Household id</label><input id="s-hhid" value="${esc(defaultHouseholdId())}"></div>
+    <div><label>Household size</label><input id="s-hhsize" type="number" min="1" value="${esc(defaultHouseholdSize())}"></div>
+  </div>`;
+
+  html += `<label style="margin-top:12px">Present document types (loaded)</label>`
+        + `<div class="muted" style="margin-bottom:6px">${esc(loadedDocTypes().join(", ") || "(none)")}</div>`;
+  html += `<label>Required document types (comma-separated, editable)</label>
+    <input id="s-required" value="${esc(loadedDocTypes().join(", "))}">`;
+
+  html += `<button type="button" onclick="runSummary()">Compute income comparison &amp; readiness</button>`;
+
+  html += `<div class="out" id="summary-income-out"></div>`;
+  html += `<div class="out" id="summary-prepare-out"></div>`;
+
+  html += `<div class="wizard-nav">
+    <button type="button" class="btn-ghost" onclick="goBack()">&larr; Back</button>
+    <button type="button" onclick="goNext()">Next: Understand &rarr;</button>
+  </div>`;
+  html += `</div>`;
+  return html;
 }
 
-async function extractSelected(){
-  const fileName = document.getElementById("doc-select").value;
-  if (!fileName) return;
-  const el = document.getElementById("profile-out");
-  el.innerHTML = "<span class='muted'>Extracting...</span>";
-  const d = await post("/api/extract", { file_name: fileName });
-  if (d.error){ el.innerHTML = `<span class="badge review">${esc(d.error)}</span>`; return; }
-  renderProfile(d);
-}
+async function runSummary(){
+  const hhidEl = document.getElementById("s-hhid");
+  const hhsizeEl = document.getElementById("s-hhsize");
+  const reqEl = document.getElementById("s-required");
+  const incomeOut = document.getElementById("summary-income-out");
+  const prepOut = document.getElementById("summary-prepare-out");
+  if (!hhidEl || !hhsizeEl || !reqEl || !incomeOut || !prepOut) return; // not on this step anymore
 
-async function uploadSelected(){
-  const fileInput = document.getElementById("doc-file");
-  const file = fileInput.files[0];
-  if (!file){ alert("Choose a PDF file first."); return; }
-  const fd = new FormData();
-  fd.append("file", file);
-  const dt = document.getElementById("doc-type-override").value;
-  if (dt) fd.append("document_type", dt);
-  const el = document.getElementById("profile-out");
-  el.innerHTML = "<span class='muted'>Uploading and extracting...</span>";
-  const r = await fetch("/api/upload", { method:"POST", body: fd });
-  const d = await r.json();
-  if (d.error){ el.innerHTML = `<span class="badge review">${esc(d.error)}</span>`; return; }
-  renderProfile(d);
-}
+  const hhid = hhidEl.value || "HH";
+  const size = parseInt(hhsizeEl.value, 10) || 1;
+  const required = reqEl.value.split(",").map(s => s.trim()).filter(Boolean);
+  const present = loadedDocTypes();
+  const sources = buildIncomeSourcesFromConfirmed();
 
-async function useConfirmedIncome(){
-  if (!currentProfile) return;
-  const dt = currentProfile.data.document_type;
-  let amount, frequency;
-  if (dt === "pay_stub"){
-    amount = parseFloat(getFieldValue("gross_pay"));
-    frequency = getFieldValue("pay_frequency");
-  } else if (dt === "gig_statement"){
-    amount = parseFloat(getFieldValue("gross_receipts"));
-    frequency = "monthly"; // gig statements are reported per calendar month (statement_month)
-  } else if (dt === "benefit_letter"){
-    amount = parseFloat(getFieldValue("monthly_benefit"));
-    frequency = "monthly";
-  } else {
+  incomeOut.innerHTML = "<span class='muted'>Computing income comparison...</span>";
+  prepOut.innerHTML = "<span class='muted'>Assessing readiness...</span>";
+
+  const incomeResult = await post("/api/income", { household_size: size, threshold_pct: 60, income_sources: sources });
+  incomeOut.innerHTML = incomeResult.error
+    ? `<span class="badge review">${esc(incomeResult.error)}</span>`
+    : `<h3 style="margin:14px 0 6px;font-size:14px">Income comparison</h3>` + comparisonHtml(incomeResult)
+      + (sources.length === 0 ? `<div class="muted" style="margin-top:6px">No confirmed income sources yet.</div>` : "");
+
+  const prep = await post("/api/prepare", {
+    household_id: hhid,
+    household_size: size,
+    required_document_types: required,
+    present_document_types: present,
+    income_sources: sources,
+    known_conflicts: []
+  });
+  if (prep.error){
+    prepOut.innerHTML = `<span class="badge review">${esc(prep.error)}</span>`;
     return;
   }
-  const size = parseInt(document.getElementById("profile-hh-size").value) || 1;
-  const el = document.getElementById("profile-income-out");
-  el.innerHTML = "<span class='muted'>Computing...</span>";
-  const d = await post("/api/income", {
-    household_size: size,
-    threshold_pct: 60,
-    income_sources: [{ amount, frequency }]
-  });
-  el.innerHTML = d.error ? `<span class="badge review">${esc(d.error)}</span>` : comparisonHtml(d);
+  const cls = prep.readiness_status === "READY_TO_REVIEW" ? "ok" : "review";
+  let html = `<h3 style="margin:14px 0 6px;font-size:14px">Readiness</h3><span class="badge ${cls}">${esc(prep.readiness_status)}</span>`;
+  if (prep.flags && prep.flags.length){
+    html += prep.flags.map(f => `<div class="flag"><b>${esc(f.code)}</b><br>${esc(f.detail)}<br>`
+      + `<span class="muted">Rule ${esc(f.rule.rule_id)}: ${esc(f.rule.source_url)}</span></div>`).join("");
+  } else {
+    html += `<div class="muted" style="margin:8px 0">No blocking issues found.</div>`;
+  }
+  html += comparisonHtml(prep.income_comparison);
+  html += `<div class="muted" style="margin-top:8px">${esc(prep.decision_boundary)}</div>`;
+  html += `<div class="muted" style="margin-top:6px">Citations</div>` + (prep.citations || []).map(citeHtml).join("");
+  prepOut.innerHTML = html;
 }
 
-function useConfirmedProfile(){
-  if (!currentProfile) return;
-  const size = getFieldValue("household_size");
-  const hhId = currentProfile.data.household_id;
-  if (size != null && size !== "") document.getElementById("p-size").value = size;
-  if (hhId) document.getElementById("p-id").value = hhId;
-  document.getElementById("profile-prefill-out").innerHTML =
-    `<span class="muted">Prepare card's Household id and Size fields (below) have been filled in from the confirmed profile.</span>`;
+/* ---------------- Step N+3: understand ---------------- */
+function buildUnderstandHtml(){
+  let html = `<div class="card">`;
+  html += `<h2>Understand &mdash; ask a rule question</h2>`;
+  html += `<p class="hint">Answers only from cited corpus prose; abstains if no rule matches.</p>`;
+  html += `<label>Question</label><textarea id="u-q">${esc(state.question)}</textarea>`;
+  html += `<button type="button" onclick="askUnderstand()">Ask</button>`;
+  html += `<div class="out" id="understand-out"></div>`;
+  html += `<div class="wizard-nav"><button type="button" class="btn-ghost" onclick="goBack()">&larr; Back</button><span></span></div>`;
+  html += `</div>`;
+  return html;
 }
-
-window.addEventListener("DOMContentLoaded", loadDocuments);
-
-/* ---------------- 2) Understand ---------------- */
-async function ask(){
+async function askUnderstand(){
+  const q = document.getElementById("u-q").value;
+  state.question = q;
   const el = document.getElementById("understand-out");
   el.innerHTML = "<span class='muted'>Thinking...</span>";
-  const d = await post("/api/understand", {question:document.getElementById("q").value});
+  const d = await post("/api/understand", { question: q });
   let html = "";
   if (d.safety_intercept) html += `<span class="badge safe">safety: ${esc(d.safety_intercept)}</span><br>`;
   else if (d.abstained) html += `<span class="badge safe">abstained</span><br>`;
@@ -427,46 +635,6 @@ async function ask(){
   if (d.citations && d.citations.length){
     html += `<div class="muted" style="margin-top:8px">Citations</div>` + d.citations.map(citeHtml).join("");
   }
-  el.innerHTML = html;
-}
-
-/* ---------------- 3) Income ---------------- */
-async function income(){
-  const el = document.getElementById("income-out");
-  el.innerHTML = "<span class='muted'>Computing...</span>";
-  const d = await post("/api/income", {
-    household_size: parseInt(document.getElementById("i-size").value),
-    threshold_pct: parseInt(document.getElementById("i-pct").value),
-    income_sources: incomeSources([["i-amt1","i-freq1"],["i-amt2","i-freq2"]])
-  });
-  el.innerHTML = d.error ? `<span class="badge review">${esc(d.error)}</span>` : comparisonHtml(d);
-}
-
-/* ---------------- 4) Prepare ---------------- */
-async function prepare(){
-  const el = document.getElementById("prepare-out");
-  el.innerHTML = "<span class='muted'>Assessing...</span>";
-  const split = s => s.split(",").map(x=>x.trim()).filter(Boolean);
-  const d = await post("/api/prepare", {
-    household_id: document.getElementById("p-id").value,
-    household_size: parseInt(document.getElementById("p-size").value),
-    required_document_types: split(document.getElementById("p-req").value),
-    present_document_types: split(document.getElementById("p-present").value),
-    known_conflicts: split(document.getElementById("p-conf").value),
-    income_sources: incomeSources([["p-amt","p-freq"]])
-  });
-  if (d.error){ el.innerHTML = `<span class="badge review">${esc(d.error)}</span>`; return; }
-  const cls = d.readiness_status==="READY_TO_REVIEW" ? "ok" : "review";
-  let html = `<span class="badge ${cls}">${esc(d.readiness_status)}</span>`;
-  if (d.flags.length){
-    html += d.flags.map(f=>`<div class="flag"><b>${esc(f.code)}</b><br>${esc(f.detail)}<br>`
-      + `<span class="muted">Rule ${esc(f.rule.rule_id)}: ${esc(f.rule.source_url)}</span></div>`).join("");
-  } else {
-    html += `<div class="muted" style="margin:8px 0">No blocking issues found.</div>`;
-  }
-  html += comparisonHtml(d.income_comparison);
-  html += `<div class="muted" style="margin-top:8px">${esc(d.decision_boundary)}</div>`;
-  html += `<div class="muted" style="margin-top:6px">Citations</div>` + d.citations.map(citeHtml).join("");
   el.innerHTML = html;
 }
 </script>
