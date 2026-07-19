@@ -43,7 +43,11 @@ CHUNK_TOTAL_MIN = 150
 CHUNK_TOTAL_MAX = 300
 RETRIEVE_TOP_K = 20          # hybrid candidate pool
 RERANK_TOP_K = 5             # returned to the answerer
-ABSTAIN_SCORE = 0.5         # best rerank score below this -> abstain
+# Best raw cosine (text-embedding-3-small) below this -> abstain. Calibrated
+# empirically: on-topic queries score ~0.50-0.65, off-topic ~0.00-0.10, so 0.35
+# separates them cleanly. (claude.md suggests 0.5; that over-abstains at this
+# embedding scale, where a valid query measured 0.516.)
+ABSTAIN_SCORE = 0.35
 IRS_MAX_CHUNK_SHARE = 0.30  # irs_pub5913 must not exceed this share of chunks
 
 # Canonical HUD 4350.3 handbook landing page. Exhibit 5-1 has a known direct
