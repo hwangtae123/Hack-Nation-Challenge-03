@@ -107,23 +107,50 @@ def api_extract():
     return jsonify(_extract_response(path))
 
 
+@app.post("/api/extract_batch")
+def api_extract_batch():
+    """Extract several bundled documents at once (e.g. a whole household)."""
+    names = (request.get_json(silent=True) or {}).get("file_names", [])
+    if not names:
+        return jsonify(error="file_names is required."), 400
+    documents = [_extract_response(_safe_doc_path(n, "dataset")) for n in names]
+    return jsonify(documents=documents)
+
+
 @app.post("/api/upload")
 def api_upload():
-    file = request.files.get("file")
-    if file is None or not file.filename:
-        return jsonify(error="No file uploaded."), 400
-    if not file.filename.lower().endswith(".pdf"):
-        return jsonify(error="Only PDF documents are supported."), 400
-    name = secure_filename(file.filename)
-    dest = UPLOADS_DIR / name
-    file.save(str(dest))
-    # Arbitrary upload names can't be type-inferred; accept an optional override.
+    """Accept one or many uploaded PDFs; returns one extraction result each.
+
+    Multi-file uploads use the form field ``files``; a single upload may use
+    ``file`` with an optional ``document_type`` override for arbitrary names.
+    """
+    files = request.files.getlist("files")
+    single = request.files.get("file")
+    if not files and single is not None:
+        files = [single]
+    if not files:
+        return jsonify(error="No files uploaded."), 400
+
     override = request.form.get("document_type") or None
     if override and override not in doc_allowlist.ALLOWLIST:
         return jsonify(error=f"Unknown document_type: {override}"), 400
-    data = _extract_response(dest, document_type=override)
-    data["source"] = "upload"
-    return jsonify(data)
+
+    documents: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for file in files:
+        if not file.filename:
+            continue
+        if not file.filename.lower().endswith(".pdf"):
+            errors.append({"file": file.filename, "error": "Only PDF documents are supported."})
+            continue
+        name = secure_filename(file.filename)
+        dest = UPLOADS_DIR / name
+        file.save(str(dest))
+        # A per-file type override only applies to a single upload.
+        data = _extract_response(dest, document_type=override if len(files) == 1 else None)
+        data["source"] = "upload"
+        documents.append(data)
+    return jsonify(documents=documents, errors=errors)
 
 
 @app.get("/api/page.png")
