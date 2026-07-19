@@ -514,13 +514,49 @@ function defaultHouseholdSize(){
   return 1;
 }
 function buildIncomeSourcesFromConfirmed(){
+  // Returns {sources, conflicts}. Multiple pay stubs commonly corroborate the
+  // SAME recurring job (e.g. two consecutive biweekly stubs) -- summing them
+  // as if they were separate income streams double-counts. If their amounts
+  // agree, count once; if they disagree (e.g. an overtime spike on one stub),
+  // use the lower/more conservative amount for the comparison and flag a
+  // PAY_STUB_TOTAL_CONFLICT for human review rather than silently guessing.
   const sources = [];
-  state.docs.filter(isDocConfirmed).forEach(doc => {
-    if (doc.document_type === "pay_stub"){
-      const amt = parseFloat(fieldVal(doc, "gross_pay"));
-      const freq = fieldVal(doc, "pay_frequency");
-      if (!isNaN(amt) && freq) sources.push({ amount: amt, frequency: freq });
-    } else if (doc.document_type === "benefit_letter"){
+  const conflicts = [];
+  const confirmed = state.docs.filter(isDocConfirmed);
+
+  const payStubs = confirmed
+    .filter(d => d.document_type === "pay_stub")
+    .map(d => ({
+      file_name: d.file_name,
+      amount: parseFloat(fieldVal(d, "gross_pay")),
+      frequency: fieldVal(d, "pay_frequency"),
+    }))
+    .filter(p => !isNaN(p.amount) && p.frequency);
+
+  if (payStubs.length === 1){
+    sources.push({ amount: payStubs[0].amount, frequency: payStubs[0].frequency });
+  } else if (payStubs.length > 1){
+    const sameFrequency = new Set(payStubs.map(p => p.frequency)).size === 1;
+    const amounts = payStubs.map(p => p.amount);
+    const amountsMatch = (Math.max(...amounts) - Math.min(...amounts)) < 0.01;
+    if (sameFrequency && amountsMatch){
+      // Consistent pay stubs for the same job: count once, not summed.
+      sources.push({ amount: payStubs[0].amount, frequency: payStubs[0].frequency });
+    } else {
+      const lowest = payStubs.reduce((a, b) => (a.amount <= b.amount ? a : b));
+      sources.push({ amount: lowest.amount, frequency: lowest.frequency });
+      conflicts.push({
+        code: "PAY_STUB_TOTAL_CONFLICT",
+        detail: "Pay stub amounts disagree across documents ("
+          + payStubs.map(p => `${p.file_name}: $${p.amount.toLocaleString()} ${p.frequency}`).join("; ")
+          + `). Using the lower amount ($${lowest.amount.toLocaleString()} from ${lowest.file_name}) for this `
+          + "comparison as the conservative default; a human reviewer should confirm the correct recurring rate.",
+      });
+    }
+  }
+
+  confirmed.forEach(doc => {
+    if (doc.document_type === "benefit_letter"){
       const amt = parseFloat(fieldVal(doc, "monthly_benefit"));
       const freq = fieldVal(doc, "benefit_frequency") || "monthly";
       if (!isNaN(amt)) sources.push({ amount: amt, frequency: freq });
@@ -529,7 +565,8 @@ function buildIncomeSourcesFromConfirmed(){
       if (!isNaN(amt)) sources.push({ amount: amt, frequency: "monthly" });
     }
   });
-  return sources;
+
+  return { sources, conflicts };
 }
 
 const INCOME_DOC_TYPES = ["pay_stub", "benefit_letter", "gig_statement"];
@@ -596,7 +633,11 @@ async function runSummary(){
   const size = parseInt(hhsizeEl.value, 10) || 1;
   const required = reqEl.value.split(",").map(s => s.trim()).filter(Boolean);
   const present = loadedDocTypes();
-  const sources = buildIncomeSourcesFromConfirmed();
+  const { sources, conflicts } = buildIncomeSourcesFromConfirmed();
+  const conflictHtml = conflicts.length
+    ? `<div class="msg warn"><b>Pay stub conflict detected:</b><ul>`
+      + conflicts.map(c => `<li>${esc(c.detail)}</li>`).join("") + `</ul></div>`
+    : "";
 
   incomeOut.innerHTML = "<span class='muted'>Computing income comparison...</span>";
   prepOut.innerHTML = "<span class='muted'>Assessing readiness...</span>";
@@ -604,7 +645,7 @@ async function runSummary(){
   const incomeResult = await post("/api/income", { household_size: size, threshold_pct: 60, income_sources: sources });
   incomeOut.innerHTML = incomeResult.error
     ? `<span class="badge review">${esc(incomeResult.error)}</span>`
-    : `<h3 style="margin:14px 0 6px;font-size:14px">Income comparison</h3>` + comparisonHtml(incomeResult)
+    : conflictHtml + `<h3 style="margin:14px 0 6px;font-size:14px">Income comparison</h3>` + comparisonHtml(incomeResult)
       + (sources.length === 0 ? `<div class="muted" style="margin-top:6px">No confirmed income sources yet `
           + `&mdash; see the warning above if a pay stub or benefit letter was loaded but not fully confirmed.</div>` : "");
 
@@ -614,7 +655,7 @@ async function runSummary(){
     required_document_types: required,
     present_document_types: present,
     income_sources: sources,
-    known_conflicts: []
+    known_conflicts: conflicts.map(c => c.code)
   });
   if (prep.error){
     prepOut.innerHTML = `<span class="badge review">${esc(prep.error)}</span>`;
