@@ -39,6 +39,7 @@ EFFECTIVE_DATE = "2026-05-01"
 # --- model / retrieval knobs ----------------------------------------------
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIM = 1536
+CHAT_MODEL = "gpt-4o-mini"  # grounded answer synthesis for the Understand stage
 CHUNK_TOTAL_MIN = 150
 CHUNK_TOTAL_MAX = 300
 RETRIEVE_TOP_K = 20          # hybrid candidate pool
