@@ -1,0 +1,10 @@
+rag/
+
+.env
+
+*.zip
+realdoor-hackathon-starter-pack/
+
+__pycache__/
+*.pyc
+
