@@ -18,6 +18,7 @@
   main { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
          gap:16px; padding:16px 24px 40px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card.wide { grid-column: 1 / -1; }
   .card h2 { margin:0 0 4px; font-size:16px; }
   .card p.hint { margin:0 0 12px; color:var(--muted); font-size:12px; }
   label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
@@ -28,7 +29,9 @@
   button { margin-top:12px; padding:9px 14px; border:none; border-radius:6px;
     background:var(--accent); color:#04222f; font-weight:600; cursor:pointer; }
   button:hover { filter:brightness(1.08); }
-  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  button:disabled { background:var(--line); color:var(--muted); cursor:not-allowed; filter:none; }
+  .row { display:flex; gap:8px; align-items:flex-start; } .row > * { flex:1; }
+  .row > button { flex:0 0 auto; }
   .out { margin-top:14px; font-size:13px; }
   .answer { white-space:pre-wrap; background:#0b1220; border:1px solid var(--line);
             border-radius:6px; padding:10px; }
@@ -43,6 +46,28 @@
   .kv { color:var(--muted); } .kv b { color:var(--ink); }
   .muted { color:var(--muted); font-size:12px; }
   code { background:#0b1220; padding:1px 5px; border-radius:4px; }
+
+  /* Profile card additions */
+  .doc-img { max-width:100%; height:auto; border:1px solid var(--line); border-radius:6px;
+             margin:10px 0; display:block; background:#0b1220; }
+  .ftable { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+  .ftable th, .ftable td { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:middle; }
+  .ftable th { color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
+  .ftable td:last-child, .ftable th:last-child { text-align:center; }
+  .ftable input[type=text] { padding:5px 8px; }
+  .conf-track { display:inline-block; vertical-align:middle; width:64px; height:8px;
+                background:#0b1220; border:1px solid var(--line); border-radius:4px; overflow:hidden; margin-right:6px; }
+  .conf-fill { height:100%; background:var(--accent); }
+  .quarantine { margin-top:14px; border:1px solid var(--flag); border-radius:8px; padding:10px 12px;
+                background:rgba(251,113,133,.08); }
+  .quarantine .q-title { color:var(--flag); font-weight:700; font-size:13px; margin-bottom:6px; }
+  .quarantine .q-item { font-size:13px; padding:8px 0; border-top:1px dashed rgba(251,113,133,.35); }
+  .quarantine .q-item:first-of-type { border-top:none; padding-top:0; }
+  .gate { margin-top:14px; padding:8px 12px; border-radius:6px; font-size:13px; font-weight:700; }
+  .gate.locked { background:rgba(245,158,11,.12); color:var(--warn); border:1px solid var(--warn); }
+  .gate.ready { background:rgba(52,211,153,.12); color:var(--ok); border:1px solid var(--ok); }
+  .downstream { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  .field-hint { margin:2px 0 10px; }
 </style>
 </head>
 <body>
@@ -52,15 +77,52 @@
 </header>
 <div class="banner">
   This assistant does <b>not</b> decide eligibility, approval, denial, or priority.
-  It explains what the rules require, annualizes documented income, and compares it
-  with the frozen threshold so a <b>human reviewer</b> can decide.
+  It extracts and lets you confirm document data, explains what the rules require,
+  annualizes documented income, and compares it with the frozen threshold so a
+  <b>human reviewer</b> can decide.
   {% if not index_ready %}<br><b>Note:</b> the rule index is not built yet - run <code>python -m rag.build_index</code> to enable the Understand tab.{% endif %}
 </div>
 
 <main>
-  <!-- Understand -->
+  <!-- 1) Profile -->
+  <section class="card wide">
+    <h2>1) Profile &mdash; document extraction</h2>
+    <p class="hint">Pick a bundled synthetic document or upload your own PDF. Extracted fields are locked
+      until you review and confirm each one &mdash; nothing here reaches Income or Prepare unconfirmed.</p>
+
+    <div class="row">
+      <div>
+        <label>Bundled document</label>
+        <select id="doc-select"><option value="">Loading documents...</option></select>
+      </div>
+      <button onclick="extractSelected()">Extract</button>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <div>
+        <label>Upload a PDF</label>
+        <input id="doc-file" type="file" accept=".pdf">
+      </div>
+      <div>
+        <label>Document type (optional)</label>
+        <select id="doc-type-override">
+          <option value="">(infer automatically)</option>
+          <option value="application_summary">application_summary</option>
+          <option value="pay_stub">pay_stub</option>
+          <option value="employment_letter">employment_letter</option>
+          <option value="benefit_letter">benefit_letter</option>
+          <option value="gig_statement">gig_statement</option>
+        </select>
+      </div>
+      <button onclick="uploadSelected()">Upload &amp; extract</button>
+    </div>
+
+    <div class="out" id="profile-out"></div>
+  </section>
+
+  <!-- 2) Understand -->
   <section class="card">
-    <h2>Understand &mdash; ask a rule question</h2>
+    <h2>2) Understand &mdash; ask a rule question</h2>
     <p class="hint">Answers only from cited corpus prose; abstains if no rule matches.</p>
     <label>Question</label>
     <textarea id="q">How do I verify an applicant's age?</textarea>
@@ -68,9 +130,9 @@
     <div class="out" id="understand-out"></div>
   </section>
 
-  <!-- Income -->
+  <!-- 3) Income -->
   <section class="card">
-    <h2>Income &mdash; neutral threshold comparison</h2>
+    <h2>3) Income &mdash; neutral threshold comparison</h2>
     <p class="hint">Deterministic lookup + annualization. No verdict.</p>
     <div class="row">
       <div><label>Household size</label><input id="i-size" type="number" value="4" min="1"></div>
@@ -90,9 +152,9 @@
     <div class="out" id="income-out"></div>
   </section>
 
-  <!-- Prepare -->
+  <!-- 4) Prepare -->
   <section class="card">
-    <h2>Prepare &mdash; document readiness</h2>
+    <h2>4) Prepare &mdash; document readiness</h2>
     <p class="hint">Flags missing / expired / conflicting evidence, each rule-cited.</p>
     <div class="row">
       <div><label>Household id</label><input id="p-id" value="HH-003"></div>
@@ -124,7 +186,7 @@ async function post(url, body) {
   const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
   return r.json();
 }
-function esc(s){ return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
 function citeHtml(c){
   const page = c.source_page ? ` (p.${esc(c.source_page)})` : "";
   const eff = c.effective_date ? ` &middot; effective ${esc(c.effective_date)}` : "";
@@ -148,6 +210,212 @@ function incomeSources(amtIds){
   }
   return out;
 }
+
+/* ---------------- 1) Profile ---------------- */
+let currentProfile = null; // { data, source }
+
+async function loadDocuments(){
+  const sel = document.getElementById("doc-select");
+  try {
+    const r = await fetch("/api/documents");
+    const d = await r.json();
+    const docs = d.documents || [];
+    sel.innerHTML = docs.map(doc =>
+      `<option value="${esc(doc.file_name)}">${esc(doc.file_name)} &mdash; ${esc(doc.document_type || "unknown type")}</option>`
+    ).join("") || `<option value="">(no documents found)</option>`;
+  } catch (e) {
+    sel.innerHTML = `<option value="">(failed to load documents)</option>`;
+  }
+}
+
+function sizeFromHouseholdId(id){
+  const m = id ? String(id).match(/(\d)(?!.*\d)/) : null;
+  const n = m ? parseInt(m[1], 10) : NaN;
+  return (n >= 1) ? n : 1;
+}
+
+function getFieldValue(fieldName){
+  const inp = document.querySelector(`#profile-out .field-value-input[data-field="${fieldName}"]`);
+  return inp ? inp.value : null;
+}
+
+function downstreamActionsHtml(data){
+  const dt = data.document_type;
+  if (dt === "pay_stub" || dt === "gig_statement" || dt === "benefit_letter"){
+    const defSize = sizeFromHouseholdId(data.household_id);
+    const label = dt === "benefit_letter" ? "Use confirmed benefit &rarr; compare" : "Use confirmed income &rarr; compare";
+    return `<div class="downstream">
+      <div class="row">
+        <div><label>Household size for the comparison</label><input id="profile-hh-size" type="number" min="1" value="${defSize}"></div>
+        <button id="use-income-btn" onclick="useConfirmedIncome()" disabled>${label}</button>
+      </div>
+      <div class="out" id="profile-income-out"></div>
+    </div>`;
+  }
+  if (dt === "application_summary"){
+    return `<div class="downstream">
+      <button id="use-profile-btn" onclick="useConfirmedProfile()" disabled>Use confirmed profile &rarr; prefill Prepare</button>
+      <div class="out" id="profile-prefill-out"></div>
+    </div>`;
+  }
+  return "";
+}
+
+function renderProfile(data){
+  const source = data.source === "upload" ? "upload" : "dataset";
+  currentProfile = { data, source };
+  const el = document.getElementById("profile-out");
+  const isOcr = data.status === "NEEDS_OCR";
+  const badgeClass = isOcr ? "safe" : (data.status === "NEEDS_CONFIRMATION" ? "ok" : "review");
+
+  let html = `<span class="badge ${badgeClass}">${esc(data.status)}</span> `;
+  html += `<span class="muted">${esc(data.file_name)} &middot; ${esc(data.document_type || "unknown type")}`
+        + `${data.household_id ? " &middot; " + esc(data.household_id) : ""}`
+        + `${source === "upload" ? " &middot; uploaded" : ""}</span>`;
+
+  html += `<img class="doc-img" src="/api/page.png?file=${encodeURIComponent(data.file_name)}&source=${source}" `
+        + `alt="Page 1 with extracted field boxes">`;
+
+  if (isOcr){
+    html += `<div class="muted field-hint">This document is a scanned image; OCR is not wired up in Stage 1, `
+          + `so no fields were extracted.</div>`;
+  }
+
+  const allFields = data.fields || [];
+  const normalFields = allFields.filter(f => f.field !== "untrusted_instruction_text");
+  const untrustedFields = allFields.filter(f => f.field === "untrusted_instruction_text");
+
+  if (normalFields.length){
+    html += `<table class="ftable"><thead><tr><th>Field</th><th>Value</th><th>Confidence</th><th>Page</th><th>Confirm</th></tr></thead><tbody>`;
+    normalFields.forEach(f => {
+      const pct = Math.round((f.confidence == null ? 0 : f.confidence) * 100);
+      html += `<tr>
+        <td>${esc(f.field)}</td>
+        <td><input type="text" class="field-value-input" data-field="${esc(f.field)}" value="${esc(f.value)}"></td>
+        <td><span class="conf-track"><span class="conf-fill" style="width:${pct}%"></span></span>${pct}%</td>
+        <td>${esc(f.page)}</td>
+        <td><input type="checkbox" class="field-confirm-cb" onchange="updateGateStatus()"></td>
+      </tr>`;
+    });
+    html += `</tbody></table>`;
+  } else if (!isOcr) {
+    html += `<div class="muted field-hint">No allowlisted fields were extracted for this document type.</div>`;
+  }
+
+  // Quarantine panel: quarantine[] entries plus any untrusted_instruction_text field, deduped by text.
+  const qItems = (data.quarantine || []).map(q => ({ text:q.text, page:q.page, matched_pattern:q.matched_pattern }));
+  const seen = new Set(qItems.map(q => q.text));
+  untrustedFields.forEach(f => {
+    if (!seen.has(f.value)){ qItems.push({ text:f.value, page:f.page, matched_pattern:null }); seen.add(f.value); }
+  });
+  if (qItems.length){
+    html += `<div class="quarantine"><div class="q-title">Untrusted document text &mdash; quarantined, NOT executed</div>`;
+    qItems.forEach(q => {
+      html += `<div class="q-item">&ldquo;${esc(q.text)}&rdquo;<br>`
+            + `<span class="muted">page ${esc(q.page)}${q.matched_pattern ? " &middot; detector: " + esc(q.matched_pattern) : ""} `
+            + `&middot; treated as inert data only &mdash; never as an instruction, never releasable downstream</span></div>`;
+    });
+    html += `</div>`;
+  }
+
+  if (normalFields.length){
+    html += `<div class="gate locked" id="gate-status">LOCKED &mdash; confirm all fields to unlock Income / Prepare</div>`;
+    html += `<button onclick="confirmAllFields()">Confirm all</button>`;
+  }
+
+  html += downstreamActionsHtml(data);
+
+  el.innerHTML = html;
+  if (normalFields.length) updateGateStatus();
+}
+
+function updateGateStatus(){
+  const boxes = Array.from(document.querySelectorAll("#profile-out .field-confirm-cb"));
+  const total = boxes.length;
+  const done = boxes.filter(b => b.checked).length;
+  const unlocked = total > 0 && done === total;
+  const gateEl = document.getElementById("gate-status");
+  if (gateEl){
+    gateEl.className = "gate " + (unlocked ? "ready" : "locked");
+    gateEl.textContent = unlocked ? "READY — values confirmed" : `LOCKED — ${done}/${total} fields confirmed`;
+  }
+  const incomeBtn = document.getElementById("use-income-btn");
+  if (incomeBtn) incomeBtn.disabled = !unlocked;
+  const profileBtn = document.getElementById("use-profile-btn");
+  if (profileBtn) profileBtn.disabled = !unlocked;
+}
+
+function confirmAllFields(){
+  document.querySelectorAll("#profile-out .field-confirm-cb").forEach(b => b.checked = true);
+  updateGateStatus();
+}
+
+async function extractSelected(){
+  const fileName = document.getElementById("doc-select").value;
+  if (!fileName) return;
+  const el = document.getElementById("profile-out");
+  el.innerHTML = "<span class='muted'>Extracting...</span>";
+  const d = await post("/api/extract", { file_name: fileName });
+  if (d.error){ el.innerHTML = `<span class="badge review">${esc(d.error)}</span>`; return; }
+  renderProfile(d);
+}
+
+async function uploadSelected(){
+  const fileInput = document.getElementById("doc-file");
+  const file = fileInput.files[0];
+  if (!file){ alert("Choose a PDF file first."); return; }
+  const fd = new FormData();
+  fd.append("file", file);
+  const dt = document.getElementById("doc-type-override").value;
+  if (dt) fd.append("document_type", dt);
+  const el = document.getElementById("profile-out");
+  el.innerHTML = "<span class='muted'>Uploading and extracting...</span>";
+  const r = await fetch("/api/upload", { method:"POST", body: fd });
+  const d = await r.json();
+  if (d.error){ el.innerHTML = `<span class="badge review">${esc(d.error)}</span>`; return; }
+  renderProfile(d);
+}
+
+async function useConfirmedIncome(){
+  if (!currentProfile) return;
+  const dt = currentProfile.data.document_type;
+  let amount, frequency;
+  if (dt === "pay_stub"){
+    amount = parseFloat(getFieldValue("gross_pay"));
+    frequency = getFieldValue("pay_frequency");
+  } else if (dt === "gig_statement"){
+    amount = parseFloat(getFieldValue("gross_receipts"));
+    frequency = "monthly"; // gig statements are reported per calendar month (statement_month)
+  } else if (dt === "benefit_letter"){
+    amount = parseFloat(getFieldValue("monthly_benefit"));
+    frequency = "monthly";
+  } else {
+    return;
+  }
+  const size = parseInt(document.getElementById("profile-hh-size").value) || 1;
+  const el = document.getElementById("profile-income-out");
+  el.innerHTML = "<span class='muted'>Computing...</span>";
+  const d = await post("/api/income", {
+    household_size: size,
+    threshold_pct: 60,
+    income_sources: [{ amount, frequency }]
+  });
+  el.innerHTML = d.error ? `<span class="badge review">${esc(d.error)}</span>` : comparisonHtml(d);
+}
+
+function useConfirmedProfile(){
+  if (!currentProfile) return;
+  const size = getFieldValue("household_size");
+  const hhId = currentProfile.data.household_id;
+  if (size != null && size !== "") document.getElementById("p-size").value = size;
+  if (hhId) document.getElementById("p-id").value = hhId;
+  document.getElementById("profile-prefill-out").innerHTML =
+    `<span class="muted">Prepare card's Household id and Size fields (below) have been filled in from the confirmed profile.</span>`;
+}
+
+window.addEventListener("DOMContentLoaded", loadDocuments);
+
+/* ---------------- 2) Understand ---------------- */
 async function ask(){
   const el = document.getElementById("understand-out");
   el.innerHTML = "<span class='muted'>Thinking...</span>";
@@ -161,6 +429,8 @@ async function ask(){
   }
   el.innerHTML = html;
 }
+
+/* ---------------- 3) Income ---------------- */
 async function income(){
   const el = document.getElementById("income-out");
   el.innerHTML = "<span class='muted'>Computing...</span>";
@@ -171,6 +441,8 @@ async function income(){
   });
   el.innerHTML = d.error ? `<span class="badge review">${esc(d.error)}</span>` : comparisonHtml(d);
 }
+
+/* ---------------- 4) Prepare ---------------- */
 async function prepare(){
   const el = document.getElementById("prepare-out");
   el.innerHTML = "<span class='muted'>Assessing...</span>";
