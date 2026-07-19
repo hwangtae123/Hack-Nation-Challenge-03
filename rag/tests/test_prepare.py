@@ -4,11 +4,15 @@ from datetime import date
 
 from rag.calculate import IncomeSource
 from rag.prepare import (
+    EXPIRED,
     EXPIRED_DOCUMENT,
+    MISSING,
     MISSING_DOCUMENT,
     NEEDS_REVIEW,
+    PRESENT,
     READY,
     assess_readiness,
+    is_expired,
 )
 
 BANNED = ("eligible", "ineligible", "approved", "denied", "prioritiz", "qualif")
@@ -65,6 +69,53 @@ def test_known_conflict_surfaces():
     )
     assert a.readiness_status == NEEDS_REVIEW
     assert "PAY_STUB_TOTAL_CONFLICT" in [f.code for f in a.flags]
+
+
+def test_is_expired_pure_function():
+    assert is_expired("2020-01-01", None, REF) is False  # never-expires type
+    assert is_expired(None, 60, REF) is False  # no date evidence isn't staleness
+    assert is_expired("2026-04-10", 60, REF) is True  # ~100 days > 60
+    assert is_expired("2026-04-10", 120, REF) is False  # ~100 days < 120
+
+
+def test_expiry_window_differs_by_document_type():
+    # pay_stub (60-day window) and benefit_letter (120-day window) dated the
+    # same ~100 days ago must NOT be treated the same: only pay_stub expires.
+    a = assess_readiness(
+        "HH-003", 3,
+        required_document_types=["application_summary", "pay_stub", "benefit_letter"],
+        present_document_types=["application_summary", "pay_stub", "benefit_letter"],
+        income_sources=INCOME,
+        document_dates={
+            "application_summary": "2020-01-01",  # never expires (max_age_days=null)
+            "pay_stub": "2026-04-10",
+            "benefit_letter": "2026-04-10",
+        },
+        reference_date=REF,
+    )
+    codes = [f.code for f in a.flags]
+    assert codes == [EXPIRED_DOCUMENT]
+    by_type = {d.doc_type: d for d in a.document_status}
+    assert by_type["pay_stub"].status == EXPIRED
+    assert by_type["benefit_letter"].status == PRESENT
+    assert by_type["application_summary"].status == PRESENT
+
+
+def test_document_status_grid_present_missing():
+    a = assess_readiness(
+        "HH-003", 3, REQUIRED, ["application_summary", "pay_stub"], INCOME, reference_date=REF,
+    )
+    by_type = {d.doc_type: d for d in a.document_status}
+    assert by_type["application_summary"].status == PRESENT
+    assert by_type["pay_stub"].status == PRESENT
+    assert by_type["employment_letter"].status == MISSING
+
+
+def test_document_status_omits_irrelevant_types():
+    # gig_statement is neither required nor present for this household -> not listed.
+    a = assess_readiness("HH-001", 1, REQUIRED, REQUIRED, INCOME, reference_date=REF)
+    doc_types = {d.doc_type for d in a.document_status}
+    assert "gig_statement" not in doc_types
 
 
 def test_result_carries_human_boundary_and_no_verdict():

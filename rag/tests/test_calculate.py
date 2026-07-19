@@ -77,6 +77,17 @@ def test_summarize_income_sums_and_compares():
     assert res.effective_date == "2026-05-01"
     assert res.area.startswith("Boston")
     assert len(res.per_source) == 2
+    assert res.status == "computed"
+    assert res.abstain_reason is None
+
+
+def test_summarize_income_abstains_when_no_sources():
+    # An empty list almost always means "nothing confirmed yet," not a
+    # verified zero income -- this must not present as a real $0 comparison.
+    res = summarize_income([], household_size=4, threshold_pct=60)
+    assert res.status == "abstain"
+    assert res.abstain_reason
+    assert res.annualized_income == 0.0
 
 
 def test_summarize_income_above_threshold():

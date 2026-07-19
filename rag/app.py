@@ -6,20 +6,31 @@ their source boxes and confidence, confirm them (nothing flows downstream until
 confirmed), and then run the neutral income comparison and readiness check.
 
 Endpoints (all English output, no eligibility verdict anywhere):
-  GET  /                      the single-page UI
-  GET  /api/documents         list the bundled synthetic documents
-  POST /api/extract           run extraction on a bundled document
-  POST /api/upload            run extraction on an uploaded PDF
-  GET  /api/page.png          page 1 rendered with extracted/quarantined boxes
-  POST /api/understand        cited rule answer (or safe/abstain)
-  POST /api/income            neutral annualized-income vs. threshold comparison
-  POST /api/prepare           deterministic document-readiness flags
+  GET    /                    the single-page UI
+  GET    /api/documents       list the bundled synthetic documents
+  POST   /api/extract         run extraction on a bundled document
+  POST   /api/extract_batch   run extraction on several bundled documents
+  POST   /api/upload          run extraction on one or more uploaded PDFs
+  GET    /api/page.png        page 1 rendered with extracted/quarantined boxes
+  POST   /api/understand      cited rule answer (or safe/abstain)
+  POST   /api/income          neutral annualized-income vs. threshold comparison
+  POST   /api/prepare         deterministic document-readiness + checklist grid
+  POST   /api/session/delete  wipe an upload session's files from disk
+
+Data-handling guardrail: nothing in this module ever calls out to a property
+management system, landlord, or other third party -- there is no outbound
+integration of any kind. Uploaded files and extracted values exist only for
+this process's lifetime (or until the renter deletes the session below); the
+extracted "packet" the front end assembles lives in the browser only and is
+never written to a database here.
 
 Run:  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python -m rag.app   (from the repo root)
 """
 from __future__ import annotations
 
 import io
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -45,16 +56,31 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 _QUARANTINE_COLOR = (220, 40, 40)
 _FIELD_COLOR = (30, 160, 90)
 
+# Uploads are scoped under UPLOADS_DIR/<session_id>/ so a renter can wipe
+# everything they uploaded with one call (see /api/session/delete). The id is
+# opaque and client-generated (e.g. crypto.randomUUID()); this pattern is just
+# a path-safety allowlist, not an auth mechanism.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
 
 def _household_id(file_name: str) -> str:
     """hh-001_d03_pay_stub.pdf -> HH-001."""
     return file_name.split("_", 1)[0].upper()
 
 
-def _safe_doc_path(file_name: str, source: str) -> Path:
+def _session_dir(session_id: str) -> Path:
+    if not _SESSION_ID_RE.match(session_id or ""):
+        abort(400, description="Invalid session id.")
+    path = (UPLOADS_DIR / session_id).resolve()
+    if not str(path).startswith(str(UPLOADS_DIR.resolve())):
+        abort(400, description="Invalid session id.")
+    return path
+
+
+def _safe_doc_path(file_name: str, source: str, session_id: str = "") -> Path:
     """Resolve a document path, refusing anything outside the allowed folders."""
     name = secure_filename(file_name)
-    base = UPLOADS_DIR if source == "upload" else doc_config.DOCUMENTS_DIR
+    base = _session_dir(session_id) if source == "upload" else doc_config.DOCUMENTS_DIR
     path = (base / name).resolve()
     if not str(path).startswith(str(Path(base).resolve())) or not path.exists():
         abort(404, description="Document not found.")
@@ -123,7 +149,12 @@ def api_upload():
 
     Multi-file uploads use the form field ``files``; a single upload may use
     ``file`` with an optional ``document_type`` override for arbitrary names.
+    Requires a client-generated ``session_id`` so the renter can later wipe
+    everything they uploaded in one call (see /api/session/delete).
     """
+    session_id = request.form.get("session_id", "")
+    session_dir = _session_dir(session_id)  # 400s on a missing/invalid id
+
     files = request.files.getlist("files")
     single = request.files.get("file")
     if not files and single is not None:
@@ -135,6 +166,7 @@ def api_upload():
     if override and override not in doc_allowlist.ALLOWLIST:
         return jsonify(error=f"Unknown document_type: {override}"), 400
 
+    session_dir.mkdir(parents=True, exist_ok=True)
     documents: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for file in files:
@@ -144,7 +176,7 @@ def api_upload():
             errors.append({"file": file.filename, "error": "Only PDF documents are supported."})
             continue
         name = secure_filename(file.filename)
-        dest = UPLOADS_DIR / name
+        dest = session_dir / name
         file.save(str(dest))
         # A per-file type override only applies to a single upload.
         data = _extract_response(dest, document_type=override if len(files) == 1 else None)
@@ -153,11 +185,28 @@ def api_upload():
     return jsonify(documents=documents, errors=errors)
 
 
+@app.post("/api/session/delete")
+def api_session_delete():
+    """Wipe every file uploaded under a session id.
+
+    This is the renter's "delete my data" control: it removes the uploaded
+    PDFs from disk. Extracted fields and any assembled packet live only in the
+    browser and are never stored server-side, so deleting the upload
+    directory is the complete server-side cleanup needed.
+    """
+    session_id = (request.get_json(silent=True) or {}).get("session_id", "")
+    session_dir = _session_dir(session_id)
+    if session_dir.exists():
+        shutil.rmtree(session_dir)
+    return jsonify(deleted=True, session_id=session_id)
+
+
 @app.get("/api/page.png")
 def api_page_png():
     file_name = request.args.get("file", "")
     source = request.args.get("source", "dataset")
-    path = _safe_doc_path(file_name, source)
+    session_id = request.args.get("session_id", "")
+    path = _safe_doc_path(file_name, source, session_id)
     profile = build_profile(path)
     with pdfplumber.open(str(path)) as pdf:
         page = pdf.pages[0]

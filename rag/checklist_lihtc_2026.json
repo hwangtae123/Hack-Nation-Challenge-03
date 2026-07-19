@@ -1,0 +1,36 @@
+[
+  {
+    "doc_type": "application_summary",
+    "label": "Application summary",
+    "required": true,
+    "max_age_days": null,
+    "_note": "Self-declared intake form; not verification evidence, so it does not go stale like a paystub does."
+  },
+  {
+    "doc_type": "pay_stub",
+    "label": "Pay stub",
+    "required": true,
+    "max_age_days": 60,
+    "_note": "CH-READINESS-001's 60-day currency convention."
+  },
+  {
+    "doc_type": "employment_letter",
+    "label": "Employment verification letter",
+    "required": false,
+    "max_age_days": 60,
+    "_note": "Required only for households whose income scenario calls for it (set per-household via required_document_types)."
+  },
+  {
+    "doc_type": "benefit_letter",
+    "label": "Benefit verification letter",
+    "required": false,
+    "max_age_days": 120,
+    "_note": "Benefit award letters are typically valid longer than a pay stub."
+  },
+  {
+    "doc_type": "gig_statement",
+    "label": "Gig income statement",
+    "required": false,
+    "max_age_days": 60
+  }
+]

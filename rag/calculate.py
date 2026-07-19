@@ -27,6 +27,7 @@ FREQUENCY: dict[str, int] = {
 }
 
 Comparison = Literal["below_or_equal", "above", "no_frozen_threshold"]
+Status = Literal["computed", "abstain"]
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,13 @@ class ComparisonResult:
 
     Deliberately carries no verdict field. ``comparison`` is a factual relation,
     not an eligibility decision.
+
+    ``status`` is ``"abstain"`` when there isn't enough confirmed evidence to
+    trust the comparison yet (currently: no income sources at all) -- an empty
+    list almost always means "nothing confirmed yet," not "verified zero
+    income," so showing a numeric $0/below_or_equal result would misrepresent
+    an incomplete workflow as a real, confirmed comparison. Callers should
+    render an abstain state instead of the numeric comparison when this is set.
     """
 
     annualized_income: float
@@ -56,6 +64,8 @@ class ComparisonResult:
     effective_date: str
     source_url: str
     per_source: list[dict[str, Any]] = field(default_factory=list)
+    status: Status = "computed"
+    abstain_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +79,8 @@ class ComparisonResult:
             "effective_date": self.effective_date,
             "source_url": self.source_url,
             "per_source": self.per_source,
+            "status": self.status,
+            "abstain_reason": self.abstain_reason,
         }
 
 
@@ -135,6 +147,11 @@ def summarize_income(
         )
     total = round(total, 2)
     threshold = limit_for(household_size, threshold_pct)
+    status: Status = "computed"
+    abstain_reason = None
+    if not income_sources:
+        status = "abstain"
+        abstain_reason = "No confirmed income sources yet; nothing to compare."
     return ComparisonResult(
         annualized_income=total,
         household_size=household_size,
@@ -146,4 +163,6 @@ def summarize_income(
         effective_date=thresholds["effective_date"],
         source_url=thresholds["source_url"],
         per_source=per_source,
+        status=status,
+        abstain_reason=abstain_reason,
     )
