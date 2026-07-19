@@ -145,10 +145,18 @@ async function post(url, body) {
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
 function jsStr(s){ return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
 function attrJs(s){ return esc(jsStr(s)); }
+// A few frozen challenge-convention rules (CH-*) cite an internal repo doc
+// (e.g. "rules/RULES_README.md") rather than an external authority -- that's
+// a real citation for an internal audit trail, but not something to render as
+// a broken/misleading link in a renter-facing page. Only show source_url when
+// it is an actual fetchable URL; otherwise say what it is in plain words.
+function isWebUrl(u){ return typeof u === "string" && /^https?:\/\//i.test(u); }
 function citeHtml(c){
   const page = c.source_page ? ` (p.${esc(c.source_page)})` : "";
   const eff = c.effective_date ? ` &middot; effective ${esc(c.effective_date)}` : "";
-  const url = c.source_url ? `<br><a href="${esc(c.source_url)}" target="_blank" rel="noopener">${esc(c.source_url)}</a>` : "";
+  const url = isWebUrl(c.source_url)
+    ? `<br><a href="${esc(c.source_url)}" target="_blank" rel="noopener">${esc(c.source_url)}</a>`
+    : (c.source_url ? `<br><span class="muted">Project convention (internal governance doc, not an external source)</span>` : "");
   const label = c.citation || c.rule_id || "";
   return `<div class="cite">[${esc(c.n||"")}] <b>${esc(label)}</b>${page}${eff}${url}</div>`;
 }
@@ -169,7 +177,7 @@ function comparisonHtml(cmp){
   );
   const formulaHtml = formulas.length
     ? `<div class="muted" style="margin-top:4px">Formula: ${formulas.join("; ")}</div>` : "";
-  const sourceLink = cmp.source_url
+  const sourceLink = isWebUrl(cmp.source_url)
     ? `<a href="${esc(cmp.source_url)}" target="_blank" rel="noopener">source</a>` : "";
   return `<div class="kv">Annualized income: <b>$${Number(cmp.annualized_income).toLocaleString()}</b><br>`
     + `Frozen ${esc(cmp.threshold_pct)}% threshold (size ${esc(cmp.household_size)}): <b>${thr}</b><br>`
@@ -806,8 +814,11 @@ async function runSummary(){
   const cls = prep.readiness_status === "READY_TO_REVIEW" ? "ok" : "review";
   let html = `<h3 style="margin:14px 0 6px;font-size:14px">Readiness</h3><span class="badge ${cls}">${esc(prep.readiness_status)}</span>`;
   if (prep.flags && prep.flags.length){
-    html += prep.flags.map(f => `<div class="flag"><b>${esc(f.code)}</b><br>${esc(f.detail)}<br>`
-      + `<span class="muted">Rule ${esc(f.rule.rule_id)}: ${esc(f.rule.source_url)}</span></div>`).join("");
+    html += prep.flags.map(f => {
+      const src = isWebUrl(f.rule.source_url) ? esc(f.rule.source_url) : "project convention (internal governance doc)";
+      return `<div class="flag"><b>${esc(f.code)}</b><br>${esc(f.detail)}<br>`
+        + `<span class="muted">Rule ${esc(f.rule.rule_id)}: ${src}</span></div>`;
+    }).join("");
   } else {
     html += `<div class="muted" style="margin:8px 0">No blocking issues found.</div>`;
   }
